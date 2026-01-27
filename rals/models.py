@@ -83,6 +83,7 @@ class RateSchedule:
     psych_followup_rate: Decimal = Decimal("0.00")  # "Psych flu" = Psych follow-up
     emdr_rate: Decimal = Decimal("0.00")
     telemed_rate: Decimal = Decimal("0.00")
+    mat_rate: Decimal = Decimal("0.00")  # Medication Assisted Treatment
 
     def get_rate_for_service(self, service_type: str) -> Decimal:
         """Get the appropriate rate for a service type."""
@@ -111,6 +112,55 @@ class RateSchedule:
         else:
             # Default to IT rate
             return self.it_rate
+
+
+# Default self-pay rates for virtual services (when client has no virtual benefits)
+# Used when PPS comment indicates "SP rates for virtual", "SP for virtual", etc.
+SELF_PAY_VIRTUAL_RATES = RateSchedule(
+    assessment_rate=Decimal("450.00"),
+    iop_rate=Decimal("295.00"),
+    group_rate=Decimal("175.00"),
+    it_rate=Decimal("175.00"),
+    ft_rate=Decimal("275.00"),
+    psych_eval_rate=Decimal("675.00"),
+    psych_followup_rate=Decimal("200.00"),
+    mat_rate=Decimal("200.00"),
+)
+
+
+def is_self_pay_virtual(pps_comment: str) -> bool:
+    """
+    Check if the PPS comment indicates self-pay rates for virtual services.
+
+    This occurs when the client has no virtual/telehealth benefits.
+    Patterns: "SP rates for virtual", "SP for virtual", "Self Pay rates for virtual", etc.
+
+    Args:
+        pps_comment: The PPS Comment string
+
+    Returns:
+        True if self-pay rates apply for virtual services
+    """
+    if not pps_comment:
+        return False
+
+    pps_lower = pps_comment.lower()
+
+    # Check for various patterns indicating self-pay for virtual
+    sp_patterns = [
+        "sp rates for virtual",
+        "sp for virtual",
+        "self pay rates for virtual",
+        "self pay for virtual",
+        "self-pay rates for virtual",
+        "self-pay for virtual",
+        "(sp rates for virtual)",
+        "(sp for virtual)",
+        "(self pay rates for virtual)",
+        "(self pay for virtual)",
+    ]
+
+    return any(pattern in pps_lower for pattern in sp_patterns)
 
 
 @dataclass
@@ -248,18 +298,23 @@ class BillingLineItem:
     duration_code: str = ""
     short_service_type: str = ""
 
+    # Self-pay indicator (for virtual services with no virtual benefits)
+    is_self_pay: bool = False
+
     # Updated PPS comment (with new OOP/deductible values after this charge)
+    # Empty if self-pay (self-pay charges don't affect OOP/deductible)
     updated_pps_comment: str = ""
 
     def generate_payment_comment(self, payment_date: Optional[date] = None) -> str:
         """
-        Generate a payment comment in the format: $amount date [Tele] service [duration]
+        Generate a payment comment in the format: $amount date [Tele] service [duration] [SP]
 
         Examples:
             - "$200.00 1/26 Tele IOP"
             - "$173.00 1/26 IOP"
             - "$330.00 1/26 IT 53+"
             - "$25.00 1/26 Tele IT 16-37"
+            - "$295.00 1/26 Tele IOP SP" (self-pay, no virtual benefits)
 
         Args:
             payment_date: Optional payment date to use (defaults to date_of_service)
@@ -287,6 +342,10 @@ class BillingLineItem:
         # Add duration code if present (for IT/Outpatient services)
         if self.duration_code:
             parts.append(self.duration_code)
+
+        # Add SP suffix for self-pay (no virtual benefits)
+        if self.is_self_pay:
+            parts.append("SP")
 
         return " ".join(parts)
 

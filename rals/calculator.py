@@ -5,7 +5,10 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Tuple, Optional
 
-from .models import InsurancePlan, BillingLineItem, ServiceRecord, RateSchedule, Client
+from .models import (
+    InsurancePlan, BillingLineItem, ServiceRecord, RateSchedule, Client,
+    is_self_pay_virtual, SELF_PAY_VIRTUAL_RATES
+)
 
 
 class RateCalculator:
@@ -34,6 +37,8 @@ class RateCalculator:
         1. If deductible not met: patient pays full rate up to remaining deductible
         2. Once deductible met: patient pays coinsurance (e.g., 20% of rate)
         3. If OOP max reached: patient pays $0
+        4. If telehealth service with no virtual benefits (SP rates for virtual):
+           patient pays self-pay rate, does NOT count toward deductible/OOP
 
         Args:
             service: The service record to calculate billing for
@@ -41,15 +46,27 @@ class RateCalculator:
         Returns:
             BillingLineItem with calculated amounts
         """
-        # Get the full rate for this service
-        full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
+        # Check if this is a self-pay virtual service (no virtual benefits)
+        is_sp_virtual = (
+            service.is_telehealth and
+            is_self_pay_virtual(service.pps_comment)
+        )
 
-        # Calculate the breakdown
-        charge_amount, applied_to_ded, coinsurance_amt = self._calculate_breakdown(full_rate)
+        if is_sp_virtual:
+            # Use self-pay rates for virtual services - does NOT count toward deductible/OOP
+            full_rate = SELF_PAY_VIRTUAL_RATES.get_rate_for_service(service.service_type)
+            charge_amount = full_rate
+            applied_to_ded = Decimal("0.00")
+            coinsurance_amt = Decimal("0.00")
+            # Do NOT update plan accumulators for self-pay
+        else:
+            # Normal insurance calculation
+            full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
+            charge_amount, applied_to_ded, coinsurance_amt = self._calculate_breakdown(full_rate)
 
-        # Update plan accumulators
-        self.plan.deductible_met += applied_to_ded
-        self.plan.oop_accumulated += charge_amount
+            # Update plan accumulators (only for insurance, not self-pay)
+            self.plan.deductible_met += applied_to_ded
+            self.plan.oop_accumulated += charge_amount
 
         # Track for comment generation
         if charge_amount > 0:
@@ -74,14 +91,16 @@ class RateCalculator:
             comment=self.client.generate_tracking_comment(),
             is_telehealth=service.is_telehealth,
             duration_code=service.duration_code,
-            short_service_type=service.short_service_type
+            short_service_type=service.short_service_type,
+            is_self_pay=is_sp_virtual
         )
 
         # Generate the payment comment automatically
         billing_item.comment = billing_item.generate_payment_comment()
 
         # Generate the updated PPS comment with new OOP/deductible values
-        if service.pps_comment and final_charge > 0:
+        # Only for insurance charges, NOT for self-pay (self-pay doesn't affect OOP/deductible)
+        if service.pps_comment and final_charge > 0 and not is_sp_virtual:
             billing_item.updated_pps_comment = generate_updated_pps_comment(
                 service.pps_comment,
                 final_charge,
