@@ -95,6 +95,16 @@ def get_service_abbreviation(service_type: str) -> str:
     
     if "iop" in service_lower:
         abbrev = "IOP"
+    elif "psych eval" in service_lower or ("psychiatric" in service_lower and "eval" in service_lower):
+        abbrev = "Psych Eval"
+    elif "psych" in service_lower and ("appointment" in service_lower or "f/u" in service_lower or "follow" in service_lower):
+        # Psych follow-up appointments
+        if "30-39" in service_lower:
+            abbrev = "Psych f/u 30-39"
+        elif "20-29" in service_lower:
+            abbrev = "Psych f/u 20-29"
+        else:
+            abbrev = "Psych f/u"
     elif "outpatient 53+" in service_lower or "53+" in service_lower:
         abbrev = "IT 53+"
     elif "outpatient 16-37" in service_lower or "16-37" in service_lower:
@@ -103,15 +113,6 @@ def get_service_abbreviation(service_type: str) -> str:
         abbrev = "IT 38-52"
     elif "outpatient" in service_lower or "individual" in service_lower:
         abbrev = "IT"
-    elif "psych eval" in service_lower or "psychiatric" in service_lower and "eval" in service_lower:
-        abbrev = "Psych Eval"
-    elif "psych" in service_lower and ("f/u" in service_lower or "follow" in service_lower):
-        if "30-39" in service_lower:
-            abbrev = "Psych f/u 30-39"
-        elif "20-29" in service_lower:
-            abbrev = "Psych f/u 20-29"
-        else:
-            abbrev = "Psych f/u"
     elif "assessment" in service_lower or "diag" in service_lower:
         abbrev = "Assess"
     elif "group" in service_lower:
