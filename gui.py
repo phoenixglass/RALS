@@ -13,6 +13,7 @@ from pathlib import Path
 from decimal import Decimal, InvalidOperation
 import traceback
 
+from rals import __version__
 from rals.models import InsurancePlan, Client, RateSchedule
 from rals.parser import SpreadsheetParser
 from rals.calculator import RateCalculator
@@ -30,7 +31,7 @@ class RALSApplication:
     def __init__(self, root):
         """Initialize the GUI application."""
         self.root = root
-        self.root.title("RALS - Rate and Ledger System")
+        self.root.title(f"RALS - Rate and Ledger System v{__version__}")
         self.root.geometry("700x550")
         self.root.resizable(True, True)
         
