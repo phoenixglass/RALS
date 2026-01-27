@@ -42,6 +42,7 @@ class RALSApplication:
         self.coinsurance = tk.StringVar(value="0.40")
         self.oop_max = tk.StringVar(value="6500.00")
         self.client_name = tk.StringVar()
+        self.include_client_names = tk.BooleanVar(value=True)  # Default checked for desktop safety
         
         # Create UI
         self.create_widgets()
@@ -167,6 +168,17 @@ class RALSApplication:
             text="Browse...", 
             command=self.browse_output_file
         ).grid(row=row, column=2, pady=self.WIDGET_PADDING)
+        
+        # Client name privacy checkbox
+        row += 1
+        self.client_names_checkbox = ttk.Checkbutton(
+            main_frame,
+            text="Include client names in output (uncheck for HIPAA-compliant web deployment)",
+            variable=self.include_client_names
+        )
+        self.client_names_checkbox.grid(
+            row=row, column=0, columnspan=3, sticky=tk.W, pady=self.WIDGET_PADDING
+        )
         
         # Calculate button
         row += 1
@@ -331,7 +343,12 @@ class RALSApplication:
             # Generate output
             output_path = Path(self.output_file.get())
             self.update_status(f"Writing output file: {output_path.name}...", "blue")
-            generate_billing_report(billing_items, output_path, include_details=False)
+            generate_billing_report(
+                billing_items, 
+                output_path, 
+                include_details=False,
+                include_client_names=self.include_client_names.get()
+            )
             
             # Calculate totals
             total_charges = sum(item.charge_amount for item in billing_items)

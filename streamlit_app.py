@@ -68,6 +68,19 @@ def main():
         help="Enter the client name. If left empty, it will default to 'Client [MRN]'"
     )
     
+    # Client name privacy toggle for HIPAA compliance
+    include_client_names = st.checkbox(
+        "Include client names in output",
+        value=False,  # Default unchecked for web app (HIPAA safety)
+        help="⚠️ IMPORTANT: For HIPAA compliance in web deployments, leave this UNCHECKED. "
+             "Client names should only be included when processing files locally on a secure desktop."
+    )
+    
+    if include_client_names:
+        st.warning("⚠️ **HIPAA Warning**: You have enabled client names in the output. "
+                  "Ensure you are processing this file on a secure, local device and not uploading "
+                  "it to any cloud or shared services.")
+    
     # Insurance parameters
     st.subheader("💰 Insurance Parameters")
     
@@ -170,7 +183,12 @@ def main():
                             output_path = output_tmp.name
                         
                         try:
-                            generate_billing_report(billing_items, output_path, include_details=False)
+                            generate_billing_report(
+                                billing_items, 
+                                output_path, 
+                                include_details=False,
+                                include_client_names=include_client_names
+                            )
                             
                             # Read the output file for download
                             with open(output_path, 'rb') as f:

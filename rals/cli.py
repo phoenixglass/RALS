@@ -113,6 +113,19 @@ Examples:
         help="Print summary to console"
     )
 
+    parser.add_argument(
+        "--include-names",
+        action="store_true",
+        default=True,
+        help="Include client names in output (default: True)"
+    )
+
+    parser.add_argument(
+        "--exclude-names",
+        action="store_true",
+        help="Exclude client names from output for HIPAA compliance"
+    )
+
     # Rate overrides
     parser.add_argument("--iop-rate", type=Decimal, help="Override IOP rate")
     parser.add_argument("--it-rate", type=Decimal, help="Override Individual Therapy rate")
@@ -122,6 +135,9 @@ Examples:
     parser.add_argument("--psych-followup-rate", type=Decimal, help="Override Psych Follow-up rate")
 
     args = parser.parse_args()
+    
+    # Handle client name privacy flag
+    include_client_names = not args.exclude_names if args.exclude_names else args.include_names
 
     # Validate input file
     input_path = Path(args.input_file)
@@ -208,7 +224,12 @@ Examples:
 
     # Generate output
     output_path = Path(args.output)
-    generate_billing_report(billing_items, output_path, include_details=args.details)
+    generate_billing_report(
+        billing_items, 
+        output_path, 
+        include_details=args.details,
+        include_client_names=include_client_names
+    )
     print(f"\nBilling summary written to: {output_path}")
 
     # Print summary if requested
