@@ -1,0 +1,8 @@
+# Requirements for building executables
+# Install with: pip install -r requirements-build.txt
+
+# Base requirements
+-r requirements.txt
+
+# Build tools
+pyinstaller>=6.0.0
