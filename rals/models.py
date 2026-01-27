@@ -248,6 +248,9 @@ class BillingLineItem:
     duration_code: str = ""
     short_service_type: str = ""
 
+    # Updated PPS comment (with new OOP/deductible values after this charge)
+    updated_pps_comment: str = ""
+
     def generate_payment_comment(self, payment_date: Optional[date] = None) -> str:
         """
         Generate a payment comment in the format: $amount date [Tele] service [duration]
