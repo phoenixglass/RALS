@@ -16,16 +16,17 @@ def check_requirements():
     """Check if required packages are installed."""
     print("Checking requirements...")
     
-    required_packages = [
-        'pyinstaller',
-        'openpyxl',
-        'pandas',
-    ]
+    # Map package names to their import names
+    required_packages = {
+        'PyInstaller': 'PyInstaller',
+        'openpyxl': 'openpyxl',
+        'pandas': 'pandas',
+    }
     
     missing = []
-    for package in required_packages:
+    for package, import_name in required_packages.items():
         try:
-            __import__(package)
+            __import__(import_name)
             print(f"  ✓ {package}")
         except ImportError:
             print(f"  ✗ {package} (missing)")
