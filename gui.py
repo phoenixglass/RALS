@@ -22,6 +22,11 @@ from rals.output import generate_billing_report
 class RALSApplication:
     """Main GUI application for RALS."""
     
+    # UI Constants
+    FRAME_PADDING = 15
+    BUTTON_PADDING = 20
+    WIDGET_PADDING = 5
+    
     def __init__(self, root):
         """Initialize the GUI application."""
         self.root = root
@@ -43,7 +48,7 @@ class RALSApplication:
     def create_widgets(self):
         """Create and layout all GUI widgets."""
         # Main container
-        main_frame = ttk.Frame(self.root, padding="15")
+        main_frame = ttk.Frame(self.root, padding=str(self.FRAME_PADDING))
         main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
         
         # Configure grid weights for resizing
@@ -62,34 +67,34 @@ class RALSApplication:
         # Input file section
         row = 1
         ttk.Label(main_frame, text="Input Excel File:").grid(
-            row=row, column=0, sticky=tk.W, pady=5
+            row=row, column=0, sticky=tk.W, pady=self.WIDGET_PADDING
         )
         ttk.Entry(
             main_frame, 
             textvariable=self.input_file, 
             width=50
-        ).grid(row=row, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 5))
+        ).grid(row=row, column=1, sticky=(tk.W, tk.E), pady=self.WIDGET_PADDING, padx=(self.WIDGET_PADDING, self.WIDGET_PADDING))
         ttk.Button(
             main_frame, 
             text="Browse...", 
             command=self.browse_input_file
-        ).grid(row=row, column=2, pady=5)
+        ).grid(row=row, column=2, pady=self.WIDGET_PADDING)
         
         # Client name (optional)
         row += 1
         ttk.Label(main_frame, text="Client Name (optional):").grid(
-            row=row, column=0, sticky=tk.W, pady=5
+            row=row, column=0, sticky=tk.W, pady=self.WIDGET_PADDING
         )
         ttk.Entry(
             main_frame, 
             textvariable=self.client_name, 
             width=50
-        ).grid(row=row, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 5))
+        ).grid(row=row, column=1, sticky=(tk.W, tk.E), pady=self.WIDGET_PADDING, padx=(self.WIDGET_PADDING, self.WIDGET_PADDING))
         
         # Separator
         row += 1
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).grid(
-            row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=15
+            row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=self.FRAME_PADDING
         )
         
         # Insurance parameters section
@@ -104,63 +109,63 @@ class RALSApplication:
         # Deductible
         row += 1
         ttk.Label(main_frame, text="Deductible ($):").grid(
-            row=row, column=0, sticky=tk.W, pady=5
+            row=row, column=0, sticky=tk.W, pady=self.WIDGET_PADDING
         )
         deductible_entry = ttk.Entry(
             main_frame, 
             textvariable=self.deductible, 
             width=20
         )
-        deductible_entry.grid(row=row, column=1, sticky=tk.W, pady=5, padx=(5, 5))
+        deductible_entry.grid(row=row, column=1, sticky=tk.W, pady=self.WIDGET_PADDING, padx=(self.WIDGET_PADDING, self.WIDGET_PADDING))
         
         # Coinsurance
         row += 1
         ttk.Label(main_frame, text="Coinsurance Rate:").grid(
-            row=row, column=0, sticky=tk.W, pady=5
+            row=row, column=0, sticky=tk.W, pady=self.WIDGET_PADDING
         )
         coinsurance_entry = ttk.Entry(
             main_frame, 
             textvariable=self.coinsurance, 
             width=20
         )
-        coinsurance_entry.grid(row=row, column=1, sticky=tk.W, pady=5, padx=(5, 5))
+        coinsurance_entry.grid(row=row, column=1, sticky=tk.W, pady=self.WIDGET_PADDING, padx=(self.WIDGET_PADDING, self.WIDGET_PADDING))
         ttk.Label(main_frame, text="(e.g., 0.40 = 40%)").grid(
-            row=row, column=2, sticky=tk.W, pady=5
+            row=row, column=2, sticky=tk.W, pady=self.WIDGET_PADDING
         )
         
         # OOP Max
         row += 1
         ttk.Label(main_frame, text="Out-of-Pocket Max ($):").grid(
-            row=row, column=0, sticky=tk.W, pady=5
+            row=row, column=0, sticky=tk.W, pady=self.WIDGET_PADDING
         )
         oop_entry = ttk.Entry(
             main_frame, 
             textvariable=self.oop_max, 
             width=20
         )
-        oop_entry.grid(row=row, column=1, sticky=tk.W, pady=5, padx=(5, 5))
+        oop_entry.grid(row=row, column=1, sticky=tk.W, pady=self.WIDGET_PADDING, padx=(self.WIDGET_PADDING, self.WIDGET_PADDING))
         
         # Separator
         row += 1
         ttk.Separator(main_frame, orient=tk.HORIZONTAL).grid(
-            row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=15
+            row=row, column=0, columnspan=3, sticky=(tk.W, tk.E), pady=self.FRAME_PADDING
         )
         
         # Output file section
         row += 1
         ttk.Label(main_frame, text="Output Excel File:").grid(
-            row=row, column=0, sticky=tk.W, pady=5
+            row=row, column=0, sticky=tk.W, pady=self.WIDGET_PADDING
         )
         ttk.Entry(
             main_frame, 
             textvariable=self.output_file, 
             width=50
-        ).grid(row=row, column=1, sticky=(tk.W, tk.E), pady=5, padx=(5, 5))
+        ).grid(row=row, column=1, sticky=(tk.W, tk.E), pady=self.WIDGET_PADDING, padx=(self.WIDGET_PADDING, self.WIDGET_PADDING))
         ttk.Button(
             main_frame, 
             text="Browse...", 
             command=self.browse_output_file
-        ).grid(row=row, column=2, pady=5)
+        ).grid(row=row, column=2, pady=self.WIDGET_PADDING)
         
         # Calculate button
         row += 1
@@ -171,7 +176,7 @@ class RALSApplication:
             style="Accent.TButton"
         )
         self.calculate_btn.grid(
-            row=row, column=0, columnspan=3, pady=20
+            row=row, column=0, columnspan=3, pady=self.BUTTON_PADDING
         )
         
         # Status label
@@ -181,7 +186,7 @@ class RALSApplication:
             text="Ready to process billing data",
             foreground="gray"
         )
-        self.status_label.grid(row=row, column=0, columnspan=3, pady=5)
+        self.status_label.grid(row=row, column=0, columnspan=3, pady=self.WIDGET_PADDING)
         
         # Progress bar
         row += 1
@@ -190,7 +195,7 @@ class RALSApplication:
             mode='indeterminate',
             length=300
         )
-        self.progress.grid(row=row, column=0, columnspan=3, pady=5)
+        self.progress.grid(row=row, column=0, columnspan=3, pady=self.WIDGET_PADDING)
         
     def browse_input_file(self):
         """Open file dialog to select input Excel file."""
@@ -373,11 +378,8 @@ def main():
     """Main entry point for the GUI application."""
     root = tk.Tk()
     
-    # Set icon if available (optional)
-    # try:
-    #     root.iconbitmap('icon.ico')
-    # except:
-    #     pass
+    # Note: To add an icon, place an .ico file (Windows) or .icns file (macOS)
+    # in the same directory and use: root.iconbitmap('icon.ico')
     
     app = RALSApplication(root)
     root.mainloop()
