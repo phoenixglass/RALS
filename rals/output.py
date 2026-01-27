@@ -1,5 +1,6 @@
 """Output generator for billing summary spreadsheets."""
 
+import re
 from collections import defaultdict
 from datetime import date
 from decimal import Decimal
@@ -10,7 +11,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-from .models import BillingLineItem, generate_combined_comment
+from .models import BillingLineItem, generate_combined_comment, get_service_abbreviation
 
 
 # Output column configuration
@@ -20,7 +21,7 @@ OUTPUT_COLUMNS = [
     ("Date of Service", 12),
     ("Service Type", 20),
     ("Payment Date", 12),
-    ("Charge Amnt", 12),
+    ("Charge Amt", 12),
     ("Payment Type", 12),
     ("Receipt Saved", 12),
     ("Comment", 60),
@@ -31,7 +32,7 @@ OUTPUT_COLUMNS_NO_NAME = [
     ("Date of Service", 12),
     ("Service Type", 20),
     ("Payment Date", 12),
-    ("Charge Amnt", 12),
+    ("Charge Amt", 12),
     ("Payment Type", 12),
     ("Receipt Saved", 12),
     ("Comment", 60),
@@ -113,28 +114,19 @@ class BillingOutputGenerator:
             # Generate combined comment for same-day services
             total_charge = sum(item.charge_amount for item in items)
             
-            # Get service records for combined comment generation
-            # We'll use the billing items' service types
-            from .models import get_service_abbreviation
+            # Get unique service abbreviations, preserving Tele/NSF markers per service
+            seen_abbrevs = set()
             service_abbrevs = []
             for item in items:
                 abbrev = get_service_abbreviation(item.service_type)
-                # Remove Tele/NSF prefixes/suffixes for grouping
-                abbrev = abbrev.replace("Tele ", "").replace(" NSF", "")
-                if abbrev not in service_abbrevs:
+                # Keep the full abbreviation with Tele/NSF if present
+                if abbrev not in seen_abbrevs:
                     service_abbrevs.append(abbrev)
-            
-            # Check if any service is telehealth or NSF
-            is_telehealth = any(item.is_telehealth for item in items)
-            is_nsf = any("NSF" in item.service_type for item in items)
+                    seen_abbrevs.add(abbrev)
             
             # Build combined comment
             parts = [f"${total_charge:,.2f}", f"{service_date.month}/{service_date.day}"]
-            if is_telehealth:
-                parts.append("Tele")
             parts.append(" & ".join(service_abbrevs))
-            if is_nsf:
-                parts.append("NSF")
             
             combined_comment = " ".join(parts)
             

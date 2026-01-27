@@ -1,10 +1,12 @@
 """Data models for insurance billing calculations."""
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 from enum import Enum
+import decimal  # For InvalidOperation exception
 
 
 class ServiceCategory(Enum):
@@ -637,8 +639,6 @@ def parse_pps_comment(comment: str) -> dict:
         - renewal_date: str
         - other_parts: list of str (any other pipe-separated parts)
     """
-    import re
-    
     result = {
         'deductible_met': None,
         'deductible_total': None,
@@ -660,7 +660,7 @@ def parse_pps_comment(comment: str) -> dict:
         try:
             result['deductible_met'] = Decimal(ded_match.group(1).replace(',', ''))
             result['deductible_total'] = Decimal(ded_match.group(2).replace(',', ''))
-        except:
+        except (ValueError, decimal.InvalidOperation):
             pass
     
     # Parse OOP: $X,XXX OOP (combine) used as of M/D
@@ -672,7 +672,7 @@ def parse_pps_comment(comment: str) -> dict:
             result['oop_accumulated'] = Decimal(oop_match1.group(1).replace(',', ''))
             result['oop_max'] = Decimal(oop_match1.group(2).replace(',', ''))
             result['as_of_date'] = oop_match1.group(3)
-        except:
+        except (ValueError, decimal.InvalidOperation):
             pass
     else:
         # Try format without accumulated amount: /$X,XXX OOP (combine) used as of M/D
@@ -682,7 +682,7 @@ def parse_pps_comment(comment: str) -> dict:
             try:
                 result['oop_max'] = Decimal(oop_match2.group(1).replace(',', ''))
                 result['as_of_date'] = oop_match2.group(2)
-            except:
+            except (ValueError, decimal.InvalidOperation):
                 pass
     
     # Parse coinsurance rate: XX% coinsurance
@@ -755,7 +755,11 @@ def format_updated_pps_comment(
     # Add OOP section if present
     if parsed['oop_max'] is not None:
         oop_max = parsed['oop_max']
-        date_str = as_of_date.strftime(f"{as_of_date.month}/{as_of_date.day}") if as_of_date else parsed['as_of_date']
+        # Format date - use provided date or fall back to parsed date
+        if as_of_date:
+            date_str = f"{as_of_date.month}/{as_of_date.day}"
+        else:
+            date_str = parsed['as_of_date'] if parsed['as_of_date'] else "unknown"
         
         if parsed['oop_accumulated'] is not None:
             oop_acc = new_oop if new_oop is not None else parsed['oop_accumulated']

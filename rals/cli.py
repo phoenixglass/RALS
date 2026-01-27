@@ -114,16 +114,9 @@ Examples:
     )
 
     parser.add_argument(
-        "--include-names",
-        action="store_true",
-        default=True,
-        help="Include client names in output (default: True)"
-    )
-
-    parser.add_argument(
         "--exclude-names",
         action="store_true",
-        help="Exclude client names from output for HIPAA compliance"
+        help="Exclude client names from output for HIPAA compliance (default: names are included)"
     )
 
     # Rate overrides
@@ -136,8 +129,8 @@ Examples:
 
     args = parser.parse_args()
     
-    # Handle client name privacy flag
-    include_client_names = not args.exclude_names if args.exclude_names else args.include_names
+    # Handle client name privacy flag (default is to include names)
+    include_client_names = not args.exclude_names
 
     # Validate input file
     input_path = Path(args.input_file)
