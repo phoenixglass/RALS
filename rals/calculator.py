@@ -173,13 +173,15 @@ class RateCalculator:
 
     def calculate_all_services(
         self,
-        services: list[ServiceRecord]
+        services: list[ServiceRecord],
+        include_zero_charges: bool = False
     ) -> list[BillingLineItem]:
         """
         Calculate billing for multiple services in date order.
 
         Args:
             services: List of service records
+            include_zero_charges: If False (default), excludes unbillable ($0) appointments
 
         Returns:
             List of billing line items
@@ -190,30 +192,34 @@ class RateCalculator:
         billing_items = []
         for service in sorted_services:
             item = self.calculate_patient_responsibility(service)
-            billing_items.append(item)
+            # Only include items with charges > $0 (unless include_zero_charges is True)
+            if include_zero_charges or item.charge_amount > 0:
+                billing_items.append(item)
 
         return billing_items
 
     def calculate_all_services_combined(
         self,
         services: list[ServiceRecord],
-        combine_same_day: bool = True
+        combine_same_day: bool = True,
+        include_zero_charges: bool = False
     ) -> list[BillingLineItem]:
         """
         Calculate billing for multiple services, optionally combining same-day services.
 
-        When combine_same_day is True, self-pay services on the same date are combined
-        into a single billing item with a combined comment like "$300.00 1/26 IT & IOP".
+        When combine_same_day is True, services on the same date get a combined comment
+        showing the total amount and all service types (e.g., "$300.00 1/26 IT & IOP").
 
         Args:
             services: List of service records
-            combine_same_day: If True, combine same-day self-pay services
+            combine_same_day: If True, combine same-day service comments
+            include_zero_charges: If False (default), excludes unbillable ($0) appointments
 
         Returns:
-            List of billing line items (potentially combined)
+            List of billing line items (with combined comments for same-day items)
         """
-        # First calculate all services individually
-        billing_items = self.calculate_all_services(services)
+        # First calculate all services individually (excluding $0 by default)
+        billing_items = self.calculate_all_services(services, include_zero_charges)
 
         if not combine_same_day:
             return billing_items
