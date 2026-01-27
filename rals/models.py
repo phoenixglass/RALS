@@ -1,10 +1,12 @@
 """Data models for insurance billing calculations."""
 
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Optional
 from enum import Enum
+import decimal  # For InvalidOperation exception
 
 
 class ServiceCategory(Enum):
@@ -18,6 +20,124 @@ class ServiceCategory(Enum):
     FT = "FT"  # Family Therapy
     EMDR = "EMDR"
     OTHER = "Other"
+
+
+# Service abbreviation mapping for billing comments
+SERVICE_ABBREVIATIONS = {
+    "Telemed: IOP": "IOP",
+    "IOP-Wilton": "IOP",
+    "Telemed: Outpatient 53+": "IT 53+",
+    "Outpatient 53+": "IT 53+",
+    "Outpatient 16-37 minutes": "IT 16-37",
+    "Outpatient 38-52 minutes": "IT 38-52",
+    "Psychiatric Diag. Eval. W. Med Services": "Psych Eval",
+    "Assessment/Diag (BPS) w/o med services": "Assess",
+    "Outpatient Group (75-90 minutes)": "Group",
+    "Family Session with Client 26+ minutes": "FT",
+    "Medication Admin/Injection": "MAT",
+    "OP: Psych Appointment (30-39 minutes)": "Psych f/u 30-39",
+    "OP: Psych Appointment (20-29 minutes)": "Psych f/u 20-29",
+}
+
+
+def get_service_abbreviation(service_type: str) -> str:
+    """
+    Get abbreviated service name for billing comments.
+    
+    Handles special rules:
+    - Services starting with "Telemed:" get "Tele" prefix
+    - Services starting with "NSF" get "NSF" suffix
+    - Uses mapping table for known service types
+    - Falls back to intelligent parsing for unknown types
+    
+    Args:
+        service_type: Full service type name
+        
+    Returns:
+        Abbreviated service name for use in billing comments
+    """
+    if not service_type:
+        return "IT"
+    
+    # Check if exact match in abbreviation mapping
+    if service_type in SERVICE_ABBREVIATIONS:
+        abbrev = SERVICE_ABBREVIATIONS[service_type]
+        
+        # Add Tele prefix if original starts with "Telemed:"
+        if service_type.startswith("Telemed:"):
+            return f"Tele {abbrev}"
+        
+        return abbrev
+    
+    # Handle NSF prefix/suffix
+    has_nsf = service_type.startswith("NSF")
+    clean_service = service_type.replace("NSF ", "").strip() if has_nsf else service_type
+    
+    # Handle Telemed prefix
+    is_telemed = clean_service.startswith("Telemed:")
+    if is_telemed:
+        clean_service = clean_service.replace("Telemed:", "").strip()
+    
+    # Check cleaned service in mapping
+    if clean_service in SERVICE_ABBREVIATIONS:
+        abbrev = SERVICE_ABBREVIATIONS[clean_service]
+        
+        # Add Tele prefix if telehealth
+        if is_telemed:
+            abbrev = f"Tele {abbrev}"
+        
+        # Add NSF suffix if NSF
+        if has_nsf:
+            abbrev = f"{abbrev} NSF"
+        
+        return abbrev
+    
+    # Fallback: parse common patterns
+    service_lower = clean_service.lower()
+    
+    if "iop" in service_lower:
+        abbrev = "IOP"
+    elif "psych eval" in service_lower or ("psychiatric" in service_lower and "eval" in service_lower):
+        abbrev = "Psych Eval"
+    elif "psych" in service_lower and ("appointment" in service_lower or "f/u" in service_lower or "follow" in service_lower):
+        # Psych follow-up appointments
+        if "30-39" in service_lower:
+            abbrev = "Psych f/u 30-39"
+        elif "20-29" in service_lower:
+            abbrev = "Psych f/u 20-29"
+        else:
+            abbrev = "Psych f/u"
+    elif "outpatient 53+" in service_lower or "53+" in service_lower:
+        abbrev = "IT 53+"
+    elif "outpatient 16-37" in service_lower or "16-37" in service_lower:
+        abbrev = "IT 16-37"
+    elif "outpatient 38-52" in service_lower or "38-52" in service_lower:
+        abbrev = "IT 38-52"
+    elif "outpatient" in service_lower or "individual" in service_lower:
+        abbrev = "IT"
+    elif "assessment" in service_lower or "diag" in service_lower:
+        abbrev = "Assess"
+    elif "group" in service_lower:
+        abbrev = "Group"
+    elif "family" in service_lower:
+        abbrev = "FT"
+    elif "medication" in service_lower or "injection" in service_lower:
+        abbrev = "MAT"
+    elif "emdr" in service_lower:
+        abbrev = "EMDR"
+    else:
+        # Default fallback
+        abbrev = "IT"
+    
+    # Add Tele prefix if telehealth
+    if is_telemed:
+        abbrev = f"Tele {abbrev}"
+    
+    # Add NSF suffix if NSF
+    if has_nsf:
+        abbrev = f"{abbrev} NSF"
+    
+    return abbrev
 
 
 @dataclass
@@ -496,3 +616,237 @@ class Client:
             return "FT"
         else:
             return "IT"
+
+
+def parse_pps_comment(comment: str) -> dict:
+    """
+    Parse PPS comment into structured components.
+    
+    Expected format example:
+    "$1,670/$3,500 deductible / $14,000 OOP (combine) used as of 1/23 | 40% coinsurance | Ins Renews 1/2027"
+    
+    Args:
+        comment: PPS comment string
+        
+    Returns:
+        Dictionary with parsed components:
+        - deductible_met: Decimal
+        - deductible_total: Decimal
+        - oop_accumulated: Decimal
+        - oop_max: Decimal
+        - as_of_date: str (M/D format)
+        - coinsurance_rate: str (e.g., "40%")
+        - renewal_date: str
+        - other_parts: list of str (any other pipe-separated parts)
+    """
+    result = {
+        'deductible_met': None,
+        'deductible_total': None,
+        'oop_accumulated': None,
+        'oop_max': None,
+        'as_of_date': None,
+        'coinsurance_rate': None,
+        'renewal_date': None,
+        'other_parts': []
+    }
+    
+    if not comment:
+        return result
+    
+    # Parse deductible: $X,XXX/$X,XXX deductible
+    ded_pattern = r'\$\s*([\d,]+(?:\.\d{2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{2})?)\s*deductible'
+    ded_match = re.search(ded_pattern, comment, re.IGNORECASE)
+    if ded_match:
+        try:
+            result['deductible_met'] = Decimal(ded_match.group(1).replace(',', ''))
+            result['deductible_total'] = Decimal(ded_match.group(2).replace(',', ''))
+        except (ValueError, decimal.InvalidOperation):
+            pass
+    
+    # Parse OOP: $X,XXX OOP (combine) used as of M/D
+    # or: $X,XXX/$X,XXX OOP used as of M/D
+    oop_pattern1 = r'\$\s*([\d,]+(?:\.\d{2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{2})?)\s*OOP(?:\s*\(combine\))?\s+used\s+as\s+of\s+(\d{1,2}/\d{1,2})'
+    oop_match1 = re.search(oop_pattern1, comment, re.IGNORECASE)
+    if oop_match1:
+        try:
+            result['oop_accumulated'] = Decimal(oop_match1.group(1).replace(',', ''))
+            result['oop_max'] = Decimal(oop_match1.group(2).replace(',', ''))
+            result['as_of_date'] = oop_match1.group(3)
+        except (ValueError, decimal.InvalidOperation):
+            pass
+    else:
+        # Try format without accumulated amount: /$X,XXX OOP (combine) used as of M/D
+        oop_pattern2 = r'/\s*\$?\s*([\d,]+(?:\.\d{2})?)\s*OOP\s*\(combine\)\s+used\s+as\s+of\s+(\d{1,2}/\d{1,2})'
+        oop_match2 = re.search(oop_pattern2, comment, re.IGNORECASE)
+        if oop_match2:
+            try:
+                result['oop_max'] = Decimal(oop_match2.group(1).replace(',', ''))
+                result['as_of_date'] = oop_match2.group(2)
+            except (ValueError, decimal.InvalidOperation):
+                pass
+    
+    # Parse coinsurance rate: XX% coinsurance
+    coins_pattern = r'(\d+)%\s*coinsurance'
+    coins_match = re.search(coins_pattern, comment, re.IGNORECASE)
+    if coins_match:
+        result['coinsurance_rate'] = f"{coins_match.group(1)}%"
+    
+    # Parse renewal date: Ins Renews M/YYYY or similar
+    renewal_pattern = r'Ins(?:urance)?\s+Renews?\s+(\d{1,2}/\d{4})'
+    renewal_match = re.search(renewal_pattern, comment, re.IGNORECASE)
+    if renewal_match:
+        result['renewal_date'] = renewal_match.group(1)
+    
+    # Extract other pipe-separated parts that aren't the main components
+    parts = [p.strip() for p in comment.split('|')]
+    for part in parts:
+        # Skip parts we've already parsed
+        if any([
+            'deductible' in part.lower(),
+            'oop' in part.lower() and 'used as of' in part.lower(),
+            'coinsurance' in part.lower(),
+            'renew' in part.lower()
+        ]):
+            continue
+        if part:
+            result['other_parts'].append(part)
+    
+    return result
+
+
+def format_updated_pps_comment(
+    parsed: dict,
+    new_deductible: Optional[Decimal] = None,
+    new_oop: Optional[Decimal] = None,
+    as_of_date: Optional[date] = None
+) -> str:
+    """
+    Format an updated PPS comment with new deductible and OOP values.
+    
+    Args:
+        parsed: Dictionary from parse_pps_comment()
+        new_deductible: New deductible met amount (or None to keep existing)
+        new_oop: New OOP accumulated amount (or None to keep existing)
+        as_of_date: New as-of date (or None to keep existing)
+        
+    Returns:
+        Formatted PPS comment string
+    """
+    parts = []
+    
+    # Add deductible section if present
+    if parsed['deductible_met'] is not None and parsed['deductible_total'] is not None:
+        ded_met = new_deductible if new_deductible is not None else parsed['deductible_met']
+        ded_total = parsed['deductible_total']
+        
+        # Format with commas but no decimals if whole number
+        if ded_met == ded_met.to_integral_value():
+            ded_met_str = f"${int(ded_met):,}"
+        else:
+            ded_met_str = f"${ded_met:,.2f}"
+        
+        if ded_total == ded_total.to_integral_value():
+            ded_total_str = f"${int(ded_total):,}"
+        else:
+            ded_total_str = f"${ded_total:,.2f}"
+        
+        parts.append(f"{ded_met_str}/{ded_total_str} deductible")
+    
+    # Add OOP section if present
+    if parsed['oop_max'] is not None:
+        oop_max = parsed['oop_max']
+        # Format date - use provided date or fall back to parsed date
+        if as_of_date:
+            date_str = f"{as_of_date.month}/{as_of_date.day}"
+        else:
+            date_str = parsed['as_of_date'] if parsed['as_of_date'] else "unknown"
+        
+        if parsed['oop_accumulated'] is not None:
+            oop_acc = new_oop if new_oop is not None else parsed['oop_accumulated']
+            
+            # Format with commas
+            if oop_acc == oop_acc.to_integral_value():
+                oop_acc_str = f"${int(oop_acc):,}"
+            else:
+                oop_acc_str = f"${oop_acc:,.2f}"
+            
+            if oop_max == oop_max.to_integral_value():
+                oop_max_str = f"${int(oop_max):,}"
+            else:
+                oop_max_str = f"${oop_max:,.2f}"
+            
+            parts.append(f"{oop_acc_str}/{oop_max_str} OOP used as of {date_str}")
+        else:
+            # Format without accumulated (combine format)
+            if oop_max == oop_max.to_integral_value():
+                oop_max_str = f"${int(oop_max):,}"
+            else:
+                oop_max_str = f"${oop_max:,.2f}"
+            
+            parts.append(f"/{oop_max_str} OOP (combine) used as of {date_str}")
+    
+    # Add coinsurance if present
+    if parsed['coinsurance_rate']:
+        parts.append(f"{parsed['coinsurance_rate']} coinsurance")
+    
+    # Add renewal date if present
+    if parsed['renewal_date']:
+        parts.append(f"Ins Renews {parsed['renewal_date']}")
+    
+    # Add any other parts
+    parts.extend(parsed['other_parts'])
+    
+    return " | ".join(parts)
+
+
+def generate_combined_comment(
+    services: list,
+    total_charge: Decimal,
+    service_date: date
+) -> str:
+    """
+    Generate a combined comment for multiple services on the same date.
+    
+    Format: ${total} {month}/{day} {service1} & {service2} & ...
+    
+    Args:
+        services: List of ServiceRecord objects
+        total_charge: Total charge amount for all services
+        service_date: Date of service
+        
+    Returns:
+        Combined comment string
+    """
+    # Get abbreviated service names
+    service_abbrevs = []
+    is_telehealth = False
+    is_nsf = False
+    
+    for service in services:
+        abbrev = get_service_abbreviation(service.service_type)
+        
+        # Check if any service is telehealth or NSF
+        if service.service_type.startswith("Telemed:") or service.is_telehealth:
+            is_telehealth = True
+        if service.service_type.startswith("NSF"):
+            is_nsf = True
+        
+        # Remove "Tele" and "NSF" from individual abbreviations
+        # We'll add them once at the beginning/end
+        abbrev = abbrev.replace("Tele ", "").replace(" NSF", "")
+        
+        if abbrev not in service_abbrevs:
+            service_abbrevs.append(abbrev)
+    
+    # Build comment parts
+    parts = [f"${total_charge:,.2f}", f"{service_date.month}/{service_date.day}"]
+    
+    if is_telehealth:
+        parts.append("Tele")
+    
+    parts.append(" & ".join(service_abbrevs))
+    
+    if is_nsf:
+        parts.append("NSF")
+    
+    return " ".join(parts)
