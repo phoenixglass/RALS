@@ -108,13 +108,21 @@ python gui.py
 
 #### Automated Build
 
-Use the provided build script:
+Use the provided build scripts:
 
+**Windows:**
 ```bash
+build.bat
+```
+
+**Linux/macOS:**
+```bash
+./build.sh
+# or
 python build_exe.py
 ```
 
-This will:
+All build scripts will:
 1. Check for required dependencies
 2. Clean previous build artifacts
 3. Build the executable using PyInstaller
