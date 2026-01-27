@@ -5,12 +5,18 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Optional
 import re
+import pandas as pd
+from collections import defaultdict
 
 from openpyxl import load_workbook
 from openpyxl.worksheet.worksheet import Worksheet
 
 from .models import ServiceRecord, RateSchedule, InsurancePlan, Client
-from .calculator import parse_rates_from_pps_comment
+from .calculator import (
+    parse_rates_from_pps_comment, 
+    parse_oop_from_pps_comment,
+    parse_deductible_from_pps_comment
+)
 
 
 # Default column mappings (0-indexed) based on spreadsheet structure
@@ -59,13 +65,24 @@ class SpreadsheetParser:
     def parse_file(self, filepath: str | Path) -> list[ServiceRecord]:
         """
         Parse a spreadsheet file and return service records.
+        Supports both Excel (.xlsx, .xls) and CSV (.csv) files.
 
         Args:
-            filepath: Path to Excel file
+            filepath: Path to Excel or CSV file
 
         Returns:
             List of ServiceRecord objects
         """
+        filepath = Path(filepath)
+        
+        # Check file extension and route to appropriate parser
+        if filepath.suffix.lower() == '.csv':
+            return self._parse_csv_file(filepath)
+        else:
+            return self._parse_excel_file(filepath)
+    
+    def _parse_excel_file(self, filepath: Path) -> list[ServiceRecord]:
+        """Parse an Excel file and return service records."""
         wb = load_workbook(filepath, data_only=True)
         ws = wb.active
 
@@ -79,6 +96,87 @@ class SpreadsheetParser:
 
         wb.close()
         return records
+    
+    def _parse_csv_file(self, filepath: Path) -> list[ServiceRecord]:
+        """Parse a CSV file and return service records."""
+        # Read CSV file with pandas
+        df = pd.read_csv(filepath)
+        
+        records = []
+        for idx, row in df.iterrows():
+            record = self._parse_csv_row(row)
+            if record:
+                records.append(record)
+        
+        return records
+    
+    def _parse_csv_row(self, row: pd.Series) -> Optional[ServiceRecord]:
+        """Parse a single CSV row (pandas Series) into a ServiceRecord."""
+        # Get values from the row using column names
+        # Expected columns: GROUPFLD1, MRN, Date, Service, From, Location, 
+        # PPS Comment, Provider, Supervisor, Status, Note Status, 
+        # Physical Program, Financial Division, Funding, Comments
+        
+        try:
+            mrn = row.get('MRN', '')
+            service_date_raw = row.get('Date', '')
+            service_type = row.get('Service', '')
+            
+            # Skip empty rows
+            if pd.isna(mrn) or mrn == '' or pd.isna(service_date_raw) or service_date_raw == '':
+                return None
+            
+            # Parse date
+            if isinstance(service_date_raw, str):
+                service_date = self._parse_date(service_date_raw)
+            elif pd.isna(service_date_raw):
+                return None
+            else:
+                # Pandas might have already parsed it as a datetime
+                service_date = pd.to_datetime(service_date_raw).date()
+            
+            # Get other fields with defaults for missing values
+            location = row.get('Location', '')
+            pps_comment = row.get('PPS Comment', '')
+            provider = row.get('Provider', '')
+            supervisor = row.get('Supervisor', None)
+            status = row.get('Status', '')
+            note_status = row.get('Note Status', '')
+            physical_proc = row.get('Physical Program', '')
+            financial_div = row.get('Financial Division', '')
+            funding = row.get('Funding', '')
+            comments = row.get('Comments', '')
+            group_id = row.get('GROUPFLD1', None)
+            start_time = row.get('From', None)
+            
+            # Handle NaN values from pandas
+            def clean_value(val):
+                if pd.isna(val):
+                    return ''
+                return str(val)
+            
+            return ServiceRecord(
+                mrn=str(mrn),
+                service_date=service_date,
+                service_type=clean_value(service_type),
+                duration_mins=0,  # CSV format doesn't have duration column
+                location=clean_value(location),
+                pps_comment=clean_value(pps_comment),
+                provider=clean_value(provider),
+                supervisor=clean_value(supervisor) if not pd.isna(supervisor) else None,
+                status=clean_value(status),
+                note_status=clean_value(note_status),
+                physical_proc=clean_value(physical_proc),
+                financial_div=clean_value(financial_div),
+                funding=clean_value(funding),
+                comments=clean_value(comments),
+                group_id=clean_value(group_id) if not pd.isna(group_id) else None,
+                start_time=clean_value(start_time) if not pd.isna(start_time) else None,
+                end_time=None,
+            )
+        except Exception as e:
+            # Skip malformed rows
+            return None
 
     def _parse_row(self, ws: Worksheet, row_num: int) -> Optional[ServiceRecord]:
         """Parse a single row into a ServiceRecord."""
@@ -174,6 +272,48 @@ class SpreadsheetParser:
 
         # Return empty schedule if no rates found
         return RateSchedule()
+    
+    def group_by_mrn(self, records: list[ServiceRecord]) -> dict[str, list[ServiceRecord]]:
+        """
+        Group service records by MRN (Medical Record Number).
+        
+        Args:
+            records: List of service records
+            
+        Returns:
+            Dictionary mapping MRN to list of service records
+        """
+        grouped = defaultdict(list)
+        for record in records:
+            grouped[record.mrn].append(record)
+        return dict(grouped)
+    
+    def extract_insurance_params_from_pps(self, pps_comment: str) -> tuple[Optional[Decimal], Optional[Decimal], Optional[Decimal], Optional[Decimal], Optional[Decimal]]:
+        """
+        Extract insurance parameters from PPS comment.
+        
+        Args:
+            pps_comment: PPS Comment string
+            
+        Returns:
+            Tuple of (deductible_total, deductible_met, oop_max, oop_used, coinsurance_rate)
+            Returns None for any values that cannot be parsed
+        """
+        # Parse deductible
+        ded_met, ded_total, _ = parse_deductible_from_pps_comment(pps_comment)
+        
+        # Parse OOP
+        oop_used, oop_max, _ = parse_oop_from_pps_comment(pps_comment)
+        
+        # Parse coinsurance rate
+        coinsurance_rate = None
+        coins_pattern = r'(\d+)%\s*coinsurance'
+        coins_match = re.search(coins_pattern, pps_comment, re.IGNORECASE)
+        if coins_match:
+            # Convert percentage to decimal (e.g., 50% -> 0.50)
+            coinsurance_rate = Decimal(coins_match.group(1)) / Decimal('100')
+        
+        return ded_total, ded_met, oop_max, oop_used, coinsurance_rate
 
 
 def extract_deductible_from_comment(comment: str) -> Optional[Decimal]:

@@ -18,7 +18,7 @@ from .models import BillingLineItem, generate_combined_comment, get_service_abbr
 OUTPUT_COLUMNS = [
     ("Client Name", 15),
     ("MRN", 10),
-    ("Date of Service", 12),
+    ("DOS", 12),
     ("Service Type", 20),
     ("Payment Date", 12),
     ("Charge Amt", 12),
@@ -29,7 +29,7 @@ OUTPUT_COLUMNS = [
 
 OUTPUT_COLUMNS_NO_NAME = [
     ("MRN", 10),
-    ("Date of Service", 12),
+    ("DOS", 12),
     ("Service Type", 20),
     ("Payment Date", 12),
     ("Charge Amt", 12),

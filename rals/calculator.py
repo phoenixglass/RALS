@@ -419,8 +419,8 @@ def parse_rates_from_pps_comment(pps_comment: str) -> RateSchedule:
             continue
 
         # Look for a dollar amount in this segment
-        # Pattern: $XXX or $X,XXX or $XXX.XX
-        amount_match = re.search(r'\$\s*([\d,]+(?:\.\d{2})?)', segment)
+        # Pattern: $XXX or $X,XXX or $XXX.XX or $XXX.X
+        amount_match = re.search(r'\$\s*([\d,]+(?:\.\d{1,2})?)', segment)
         if not amount_match:
             continue
 
@@ -453,7 +453,7 @@ def parse_rates_from_pps_comment(pps_comment: str) -> RateSchedule:
         # Fallback: look for patterns anywhere in the string
         for pattern, attr_name in rate_type_patterns:
             # Match pattern followed by dollar amount
-            full_pattern = pattern + r'\s*\$\s*([\d,]+(?:\.\d{2})?)'
+            full_pattern = pattern + r'\s*\$\s*([\d,]+(?:\.\d{1,2})?)'
             match = re.search(full_pattern, pps_comment, re.IGNORECASE)
             if match:
                 amount_str = match.group(1).replace(",", "")
@@ -487,7 +487,7 @@ def parse_oop_from_pps_comment(pps_comment: str) -> Tuple[Optional[Decimal], Opt
         return None, None, None
 
     # Pattern 1: $amount/ $amount OOP used as of date
-    pattern = r'\$\s*([\d,]+(?:\.\d{2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{2})?)\s*OOP(?:\s*\(combine\))?\s+used\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+    pattern = r'\$\s*([\d,]+(?:\.\d{1,2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{1,2})?)\s*OOP(?:\s*\(combine\))?\s+used\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
 
     match = re.search(pattern, pps_comment, re.IGNORECASE)
     if match:
@@ -503,7 +503,7 @@ def parse_oop_from_pps_comment(pps_comment: str) -> Tuple[Optional[Decimal], Opt
             pass
 
     # Pattern 2: /$amount OOP (combine) used as of date (no used amount, just max)
-    pattern2 = r'/\s*\$?\s*([\d,]+(?:\.\d{2})?)\s*OOP\s*\(combine\)\s+used\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+    pattern2 = r'/\s*\$?\s*([\d,]+(?:\.\d{1,2})?)\s*OOP\s*\(combine\)\s+used\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
 
     match2 = re.search(pattern2, pps_comment, re.IGNORECASE)
     if match2:
@@ -538,7 +538,7 @@ def parse_deductible_from_pps_comment(pps_comment: str) -> Tuple[Optional[Decima
         return None, None, None
 
     # Pattern: $amount/$amount deductible
-    pattern = r'\$\s*([\d,]+(?:\.\d{2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{2})?)\s*deductible'
+    pattern = r'\$\s*([\d,]+(?:\.\d{1,2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{1,2})?)\s*deductible'
 
     match = re.search(pattern, pps_comment, re.IGNORECASE)
     if match:
@@ -602,7 +602,7 @@ def generate_updated_pps_comment(
         new_oop_used = oop_used + charge_amount
 
         # Build the pattern to find and replace the OOP section
-        oop_pattern = r'\$\s*[\d,]+(?:\.\d{2})?\s*/\s*\$?\s*[\d,]+(?:\.\d{2})?\s*OOP(?:\s*\(combine\))?\s+used\s+as\s+of\s+\d{1,2}/\d{1,2}(?:/\d{2,4})?'
+        oop_pattern = r'\$\s*[\d,]+(?:\.\d{1,2})?\s*/\s*\$?\s*[\d,]+(?:\.\d{1,2})?\s*OOP(?:\s*\(combine\))?\s+used\s+as\s+of\s+\d{1,2}/\d{1,2}(?:/\d{2,4})?'
 
         # Format the new OOP section
         # Format amounts with commas but no decimal if whole number
@@ -622,7 +622,7 @@ def generate_updated_pps_comment(
 
     elif oop_max is not None:
         # Handle "(combine)" format - just update the date
-        oop_combine_pattern = r'/\s*\$?\s*[\d,]+(?:\.\d{2})?\s*OOP\s*\(combine\)\s+used\s+as\s+of\s+\d{1,2}/\d{1,2}(?:/\d{2,4})?'
+        oop_combine_pattern = r'/\s*\$?\s*[\d,]+(?:\.\d{1,2})?\s*OOP\s*\(combine\)\s+used\s+as\s+of\s+\d{1,2}/\d{1,2}(?:/\d{2,4})?'
 
         if oop_max == oop_max.to_integral_value():
             oop_max_str = f"${int(oop_max):,}"
@@ -644,7 +644,7 @@ def generate_updated_pps_comment(
             new_ded_met = ded_met + applied_to_ded
 
             # Build the pattern to find and replace the deductible section
-            ded_pattern = r'\$\s*[\d,]+(?:\.\d{2})?\s*/\s*\$?\s*[\d,]+(?:\.\d{2})?\s*deductible'
+            ded_pattern = r'\$\s*[\d,]+(?:\.\d{1,2})?\s*/\s*\$?\s*[\d,]+(?:\.\d{1,2})?\s*deductible'
 
             # Format the new deductible section
             if new_ded_met == new_ded_met.to_integral_value():
