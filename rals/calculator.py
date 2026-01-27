@@ -132,12 +132,22 @@ class RateCalculator:
 
         Returns:
             Tuple of (total_patient_owes, applied_to_deductible, coinsurance_amount)
+            Note: For copay plans, coinsurance_amount contains the copay amount
         """
         # If OOP max already reached, patient owes nothing
         if self.plan.oop_max_reached:
             return Decimal("0.00"), Decimal("0.00"), Decimal("0.00")
 
         remaining_oop = self.plan.remaining_oop
+
+        # Handle copay plans
+        if self.plan.has_copay:
+            # Copay: fixed amount, does NOT count toward deductible, DOES count toward OOP
+            copay_amount = min(self.plan.copay, remaining_oop)  # Cap at remaining OOP
+            # Return copay as "coinsurance_amount" for tracking (applied_to_deductible is always 0)
+            return copay_amount, Decimal("0.00"), copay_amount
+
+        # Standard deductible + coinsurance calculation
         remaining_ded = self.plan.remaining_deductible
 
         applied_to_deductible = Decimal("0.00")

@@ -32,6 +32,9 @@ class InsurancePlan:
     deductible_met: Decimal = Decimal("0.00")
     oop_accumulated: Decimal = Decimal("0.00")
 
+    # Copay (if set, used instead of coinsurance; does NOT count toward deductible, DOES count toward OOP)
+    copay: Optional[Decimal] = None
+
     def __post_init__(self):
         """Ensure all monetary values are Decimal."""
         if not isinstance(self.deductible, Decimal):
@@ -44,6 +47,13 @@ class InsurancePlan:
             self.deductible_met = Decimal(str(self.deductible_met))
         if not isinstance(self.oop_accumulated, Decimal):
             self.oop_accumulated = Decimal(str(self.oop_accumulated))
+        if self.copay is not None and not isinstance(self.copay, Decimal):
+            self.copay = Decimal(str(self.copay))
+
+    @property
+    def has_copay(self) -> bool:
+        """Whether this plan uses copay instead of coinsurance."""
+        return self.copay is not None and self.copay > 0
 
     @property
     def remaining_deductible(self) -> Decimal:
