@@ -227,14 +227,15 @@ class RateSchedule:
             return self.emdr_rate if self.emdr_rate > 0 else self.it_rate
         elif "telemed" in service_lower and "psych" in service_lower:
             return self.psych_followup_rate if self.psych_followup_rate > 0 else self.telemed_rate
+        elif "group" in service_lower:
+            # Check for "group" before generic "outpatient" to handle "Outpatient Group" correctly
+            return self.group_rate
         elif "outpatient" in service_lower and "53" in service_lower:
             return self.it_rate  # Outpatient 53+ maps to IT rate
         elif "outpatient" in service_lower:
             return self.it_rate
         elif "psych eval" in service_lower:
             return self.psych_eval_rate
-        elif "group" in service_lower:
-            return self.group_rate
         elif "family" in service_lower or "ft" in service_lower:
             return self.ft_rate
         elif "individual" in service_lower or "it" in service_lower:
@@ -323,14 +324,18 @@ def is_bundled_with_iop(pps_comment: str, physical_proc: str, service_type: str)
         return False
 
     # IT and FT services are bundled with IOP
+    # Group therapy is NOT bundled - it's a different level of care (outpatient vs intensive outpatient)
+    is_group_service = "group" in service_lower
+
     is_it_service = (
         "individual" in service_lower or
         ("it" in service_lower and "outpatient" not in service_lower) or
-        "outpatient" in service_lower
+        ("outpatient" in service_lower and not is_group_service)  # Exclude "Outpatient Group"
     )
     is_ft_service = "family" in service_lower or "ft" in service_lower
 
-    return is_it_service or is_ft_service
+    # Only IT and FT are bundled; Group is NOT bundled (different LOC)
+    return (is_it_service or is_ft_service) and not is_group_service
 
 
 @dataclass
