@@ -32,6 +32,9 @@ class InsurancePlan:
     deductible_met: Decimal = Decimal("0.00")
     oop_accumulated: Decimal = Decimal("0.00")
 
+    # Copay (if set, used instead of coinsurance; does NOT count toward deductible, DOES count toward OOP)
+    copay: Optional[Decimal] = None
+
     def __post_init__(self):
         """Ensure all monetary values are Decimal."""
         if not isinstance(self.deductible, Decimal):
@@ -44,6 +47,13 @@ class InsurancePlan:
             self.deductible_met = Decimal(str(self.deductible_met))
         if not isinstance(self.oop_accumulated, Decimal):
             self.oop_accumulated = Decimal(str(self.oop_accumulated))
+        if self.copay is not None and not isinstance(self.copay, Decimal):
+            self.copay = Decimal(str(self.copay))
+
+    @property
+    def has_copay(self) -> bool:
+        """Whether this plan uses copay instead of coinsurance."""
+        return self.copay is not None and self.copay > 0
 
     @property
     def remaining_deductible(self) -> Decimal:
@@ -74,6 +84,7 @@ class InsurancePlan:
 @dataclass
 class RateSchedule:
     """Rate schedule extracted from PPS Comment."""
+    assessment_rate: Decimal = Decimal("0.00")  # Initial assessment
     iop_rate: Decimal = Decimal("0.00")
     group_rate: Decimal = Decimal("0.00")
     it_rate: Decimal = Decimal("0.00")  # Individual Therapy
@@ -82,12 +93,15 @@ class RateSchedule:
     psych_followup_rate: Decimal = Decimal("0.00")  # "Psych flu" = Psych follow-up
     emdr_rate: Decimal = Decimal("0.00")
     telemed_rate: Decimal = Decimal("0.00")
+    mat_rate: Decimal = Decimal("0.00")  # Medication Assisted Treatment
 
     def get_rate_for_service(self, service_type: str) -> Decimal:
         """Get the appropriate rate for a service type."""
         service_lower = service_type.lower()
 
-        if "iop" in service_lower:
+        if "assessment" in service_lower:
+            return self.assessment_rate if self.assessment_rate > 0 else self.it_rate
+        elif "iop" in service_lower:
             return self.iop_rate
         elif "emdr" in service_lower:
             return self.emdr_rate if self.emdr_rate > 0 else self.it_rate
@@ -108,6 +122,95 @@ class RateSchedule:
         else:
             # Default to IT rate
             return self.it_rate
+
+
+# Default self-pay rates for virtual services (when client has no virtual benefits)
+# Used when PPS comment indicates "SP rates for virtual", "SP for virtual", etc.
+SELF_PAY_VIRTUAL_RATES = RateSchedule(
+    assessment_rate=Decimal("450.00"),
+    iop_rate=Decimal("295.00"),
+    group_rate=Decimal("175.00"),
+    it_rate=Decimal("175.00"),
+    ft_rate=Decimal("275.00"),
+    psych_eval_rate=Decimal("675.00"),
+    psych_followup_rate=Decimal("200.00"),
+    mat_rate=Decimal("200.00"),
+)
+
+
+def is_self_pay_virtual(pps_comment: str) -> bool:
+    """
+    Check if the PPS comment indicates self-pay rates for virtual services.
+
+    This occurs when the client has no virtual/telehealth benefits.
+    Patterns: "SP rates for virtual", "SP for virtual", "Self Pay rates for virtual", etc.
+
+    Args:
+        pps_comment: The PPS Comment string
+
+    Returns:
+        True if self-pay rates apply for virtual services
+    """
+    if not pps_comment:
+        return False
+
+    pps_lower = pps_comment.lower()
+
+    # Check for various patterns indicating self-pay for virtual
+    sp_patterns = [
+        "sp rates for virtual",
+        "sp for virtual",
+        "self pay rates for virtual",
+        "self pay for virtual",
+        "self-pay rates for virtual",
+        "self-pay for virtual",
+        "(sp rates for virtual)",
+        "(sp for virtual)",
+        "(self pay rates for virtual)",
+        "(self pay for virtual)",
+    ]
+
+    return any(pattern in pps_lower for pattern in sp_patterns)
+
+
+def is_bundled_with_iop(pps_comment: str, physical_proc: str, service_type: str) -> bool:
+    """
+    Check if a service is bundled with IOP and should not be charged separately.
+
+    When the PPS comment includes "In Network:" and the Physical Program column
+    includes "IOP", then IT and FT services are bundled with the IOP program
+    and should not be charged separately.
+
+    Args:
+        pps_comment: The PPS Comment string
+        physical_proc: The Physical Program column value
+        service_type: The service type being checked
+
+    Returns:
+        True if this service is bundled with IOP (no separate charge)
+    """
+    if not pps_comment or not physical_proc:
+        return False
+
+    pps_lower = pps_comment.lower()
+    physical_lower = physical_proc.lower()
+    service_lower = service_type.lower()
+
+    # Check if "In Network:" is in PPS comment and "IOP" is in Physical Program
+    is_in_network_iop = "in network:" in pps_lower and "iop" in physical_lower
+
+    if not is_in_network_iop:
+        return False
+
+    # IT and FT services are bundled with IOP
+    is_it_service = (
+        "individual" in service_lower or
+        ("it" in service_lower and "outpatient" not in service_lower) or
+        "outpatient" in service_lower
+    )
+    is_ft_service = "family" in service_lower or "ft" in service_lower
+
+    return is_it_service or is_ft_service
 
 
 @dataclass
@@ -142,6 +245,92 @@ class ServiceRecord:
                 except ValueError:
                     continue
 
+    @property
+    def is_telehealth(self) -> bool:
+        """Check if this is a telehealth service.
+
+        Telehealth is determined by:
+        1. Service type starting with "Telemed:" (e.g., "Telemed: IOP")
+        2. Location containing "telehealth"
+
+        Note: "Telemed: Y" in PPS comment indicates telehealth availability,
+        not that this specific service was telehealth.
+        """
+        service_lower = self.service_type.lower()
+        location_lower = self.location.lower() if self.location else ""
+
+        # Check if service type explicitly indicates telehealth
+        # e.g., "Telemed: IOP", "Telemed: Outpatient 16-37 minute"
+        return (
+            service_lower.startswith("telemed") or
+            "telehealth" in location_lower
+        )
+
+    @property
+    def duration_code(self) -> str:
+        """Get duration code based on service duration (e.g., '53+', '16-37').
+
+        Duration codes only apply to IT/Outpatient services, not IOP, Group, etc.
+        """
+        service_lower = self.service_type.lower()
+
+        # Duration codes only apply to IT/Outpatient services
+        if not ("outpatient" in service_lower or "it" in service_lower or "individual" in service_lower):
+            # Check if it's not IOP, Group, Assessment, etc.
+            if any(x in service_lower for x in ["iop", "group", "assessment", "psych", "emdr", "family", "ft"]):
+                return ""
+
+        # Check if duration code is in service type already
+        service_type = self.service_type
+        if "53+" in service_type or "53-" in service_type:
+            return "53+"
+        if "16-37" in service_type:
+            return "16-37"
+        if "38-52" in service_type:
+            return "38-52"
+
+        # Determine from duration_mins for IT/Outpatient services
+        if "outpatient" in service_lower or "it" in service_lower or "individual" in service_lower:
+            if self.duration_mins >= 53:
+                return "53+"
+            elif self.duration_mins >= 38:
+                return ""  # Standard session, no suffix needed
+            elif self.duration_mins >= 16:
+                return "16-37"
+
+        return ""
+
+    @property
+    def short_service_type(self) -> str:
+        """Get abbreviated service type for payment comments."""
+        service_lower = self.service_type.lower()
+
+        if "iop" in service_lower:
+            return "IOP"
+        elif "assessment" in service_lower:
+            return "Assessment"
+        elif "psych eval" in service_lower:
+            return "Psych Eval"
+        elif "emdr" in service_lower:
+            return "EMDR"
+        elif "group" in service_lower:
+            return "Group"
+        elif "family" in service_lower or ("ft" in service_lower and "outpatient" not in service_lower):
+            return "FT"
+        elif "outpatient" in service_lower or "individual" in service_lower or "it" in service_lower:
+            return "IT"
+        else:
+            return "IT"
+
+    @property
+    def is_bundled(self) -> bool:
+        """Check if this service is bundled with IOP (no separate charge).
+
+        When PPS comment has "In Network:" and Physical Program has "IOP",
+        IT and FT services are bundled with IOP and not charged separately.
+        """
+        return is_bundled_with_iop(self.pps_comment, self.physical_proc, self.service_type)
+
 
 @dataclass
 class BillingLineItem:
@@ -162,6 +351,91 @@ class BillingLineItem:
     coinsurance_amount: Decimal = Decimal("0.00")
     deductible_remaining_after: Decimal = Decimal("0.00")
     oop_remaining_after: Decimal = Decimal("0.00")
+
+    # Service details for payment comment generation
+    is_telehealth: bool = False
+    duration_code: str = ""
+    short_service_type: str = ""
+
+    # Self-pay indicator (for virtual services with no virtual benefits)
+    is_self_pay: bool = False
+
+    # Bundled indicator (IT/FT bundled with IOP when In Network)
+    is_bundled: bool = False
+
+    # Updated PPS comment (with new OOP/deductible values after this charge)
+    # Empty if self-pay or bundled (these don't affect OOP/deductible)
+    updated_pps_comment: str = ""
+
+    def generate_payment_comment(self, payment_date: Optional[date] = None) -> str:
+        """
+        Generate a payment comment in the format: $amount date [Tele] service [duration] [SP|Bundled]
+
+        Examples:
+            - "$200.00 1/26 Tele IOP"
+            - "$173.00 1/26 IOP"
+            - "$330.00 1/26 IT 53+"
+            - "$25.00 1/26 Tele IT 16-37"
+            - "$295.00 1/26 Tele IOP SP" (self-pay, no virtual benefits)
+            - "$0.00 1/26 IT Bundled" (IT bundled with IOP, no charge)
+
+        Args:
+            payment_date: Optional payment date to use (defaults to date_of_service)
+
+        Returns:
+            Formatted payment comment string
+        """
+        # Use provided payment date or fall back to service date
+        comment_date = payment_date or self.payment_date or self.date_of_service
+
+        # Format date as M/DD (no leading zero on month)
+        date_str = f"{comment_date.month}/{comment_date.day}"
+
+        # Build the comment parts
+        parts = [f"${self.charge_amount:,.2f}", date_str]
+
+        # Add Tele prefix if telehealth
+        if self.is_telehealth:
+            parts.append("Tele")
+
+        # Add service type
+        service = self.short_service_type or self._derive_short_service_type()
+        parts.append(service)
+
+        # Add duration code if present (for IT/Outpatient services)
+        if self.duration_code:
+            parts.append(self.duration_code)
+
+        # Add SP suffix for self-pay (no virtual benefits)
+        if self.is_self_pay:
+            parts.append("SP")
+
+        # Add Bundled suffix for services bundled with IOP
+        if self.is_bundled:
+            parts.append("Bundled")
+
+        return " ".join(parts)
+
+    def _derive_short_service_type(self) -> str:
+        """Derive short service type from full service type."""
+        service_lower = self.service_type.lower()
+
+        if "iop" in service_lower:
+            return "IOP"
+        elif "assessment" in service_lower:
+            return "Assessment"
+        elif "psych eval" in service_lower:
+            return "Psych Eval"
+        elif "emdr" in service_lower:
+            return "EMDR"
+        elif "group" in service_lower:
+            return "Group"
+        elif "family" in service_lower or ("ft" in service_lower and "outpatient" not in service_lower):
+            return "FT"
+        elif "outpatient" in service_lower or "individual" in service_lower or "it" in service_lower:
+            return "IT"
+        else:
+            return "IT"
 
 
 @dataclass
