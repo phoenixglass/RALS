@@ -31,7 +31,7 @@ def main():
     insurance_plan = InsurancePlan(
         name="Example Insurance",
         deductible=Decimal("3272.00"),
-        coinsurance_rate=Decimal("0.20"),  # Patient pays 20% after deductible
+        coinsurance_rate=Decimal("0.40"),  # Patient pays 40% after deductible
         oop_max=Decimal("6500.00"),
     )
 

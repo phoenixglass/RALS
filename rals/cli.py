@@ -22,7 +22,7 @@ Examples:
   python -m rals.cli input.xlsx -o billing_output.xlsx
 
   # Specify custom insurance plan parameters
-  python -m rals.cli input.xlsx -o billing.xlsx --deductible 3272 --coinsurance 0.20 --oop-max 6500
+  python -m rals.cli input.xlsx -o billing.xlsx --deductible 3272 --coinsurance 0.40 --oop-max 6500
 
   # Include calculation details in output
   python -m rals.cli input.xlsx -o billing.xlsx --details
@@ -62,8 +62,8 @@ Examples:
     parser.add_argument(
         "--coinsurance",
         type=Decimal,
-        default=Decimal("0.20"),
-        help="Coinsurance rate as decimal (default: 0.20 = 20%%)"
+        default=Decimal("0.40"),
+        help="Coinsurance rate as decimal (default: 0.40 = 40%%)"
     )
 
     parser.add_argument(
