@@ -157,7 +157,6 @@ The application will open in your default web browser at `http://localhost:8501`
 - No additional configuration needed
 - The app updates automatically when you push to your repository
 - Free tier includes sufficient resources for typical usage
-```
 
 ### Building the Executable
 

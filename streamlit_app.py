@@ -4,14 +4,33 @@ Insurance rate calculator web interface
 """
 
 import streamlit as st
-from pathlib import Path
 import tempfile
+import os
 from decimal import Decimal
+import re
 
 from rals.parser import SpreadsheetParser
 from rals.calculator import RateCalculator
 from rals.output import BillingOutputGenerator
 from rals.models import Client, InsurancePlan
+
+
+def sanitize_filename(name):
+    """Sanitize a string to be safe for use in a filename.
+    
+    Args:
+        name: String to sanitize
+        
+    Returns:
+        Safe filename string
+    """
+    # Replace spaces with underscores
+    safe_name = name.replace(' ', '_')
+    # Remove any characters that aren't alphanumeric, underscore, hyphen, or period
+    safe_name = re.sub(r'[^\w\-.]', '', safe_name)
+    # Limit length to reasonable size
+    safe_name = safe_name[:100]
+    return safe_name if safe_name else "output"
 
 
 def main():
@@ -134,9 +153,14 @@ def main():
                         tmp_file.write(uploaded_file.getvalue())
                         input_path = tmp_file.name
                     
-                    # Parse the input file
-                    parser = SpreadsheetParser()
-                    services = parser.parse_file(input_path)
+                    try:
+                        # Parse the input file
+                        parser = SpreadsheetParser()
+                        services = parser.parse_file(input_path)
+                    finally:
+                        # Clean up the temporary input file
+                        if os.path.exists(input_path):
+                            os.unlink(input_path)
                     
                     if not services:
                         st.error("⚠️ No valid service records found in the uploaded file")
@@ -157,7 +181,7 @@ def main():
                     
                     # Create client
                     # Get MRN from first service record
-                    mrn = services[0].mrn if services and hasattr(services[0], 'mrn') and services[0].mrn else "UNKNOWN"
+                    mrn = services[0].mrn if hasattr(services[0], 'mrn') and services[0].mrn else "UNKNOWN"
                     client = Client(
                         name=client_name if client_name else "Client",
                         mrn=mrn,
@@ -176,16 +200,21 @@ def main():
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as output_tmp:
                         output_path = output_tmp.name
                     
-                    generator = BillingOutputGenerator()
-                    result_path = generator.generate(
-                        billing_items,
-                        output_path,
-                        include_details=include_details
-                    )
-                    
-                    # Read the generated file
-                    with open(result_path, "rb") as f:
-                        output_data = f.read()
+                    try:
+                        generator = BillingOutputGenerator()
+                        result_path = generator.generate(
+                            billing_items,
+                            output_path,
+                            include_details=include_details
+                        )
+                        
+                        # Read the generated file
+                        with open(result_path, "rb") as f:
+                            output_data = f.read()
+                    finally:
+                        # Clean up the temporary output file
+                        if os.path.exists(output_path):
+                            os.unlink(output_path)
                 
                 # Display success message
                 st.success("✅ Billing calculation completed successfully!")
@@ -219,7 +248,7 @@ def main():
                 # Download button
                 st.header("5️⃣ Download Results")
                 
-                output_filename = f"billing_summary_{client_name.replace(' ', '_') if client_name else 'output'}.xlsx"
+                output_filename = f"billing_summary_{sanitize_filename(client_name) if client_name else 'output'}.xlsx"
                 
                 st.download_button(
                     label="⬇️ Download Billing Summary",
