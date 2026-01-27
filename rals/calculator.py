@@ -111,11 +111,13 @@ class RateCalculator:
 
         # Generate the updated PPS comment with new OOP/deductible values
         # Only for insurance charges, NOT for self-pay or bundled (these don't affect OOP/deductible)
+        # Note: The "as of" date is set to today (when the billing report is generated),
+        # not the service date, as per user requirements.
         if service.pps_comment and final_charge > 0 and not is_sp_virtual and not is_bundled:
             billing_item.updated_pps_comment = generate_updated_pps_comment(
                 service.pps_comment,
                 final_charge,
-                service.service_date
+                None  # Use today's date for "as of" date
             )
 
         return billing_item
