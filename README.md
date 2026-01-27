@@ -4,13 +4,24 @@ Insurance rate calculator that processes service appointment data and calculates
 
 ## Features
 
+### Core Functionality
 - Parses service appointment data from spreadsheet rows
 - Extracts rates from PPS Comment field
 - Tracks deductible accumulation across services
 - Applies coinsurance after deductible is met
 - Stops charges when OOP maximum is reached
 - Generates billing summary with running totals
+
+### Enhanced Billing Output
+- **Combined Comments**: Multiple services on the same date share a combined comment showing total charge and all service types (e.g., "$425.00 1/26 IOP & IT 53+")
+- **Service Abbreviations**: Intelligent abbreviation system with Tele prefix for telehealth and NSF suffix for no-show fees
+- **Updated PPS Comments**: Automatic generation of updated PPS tracking comments with recalculated deductible/OOP amounts
+- **Client Name Privacy**: Optional exclusion of client names for HIPAA-compliant web deployments
+
+### User Interfaces
 - **GUI Application** for easy use without command line
+- **Web Application** via Streamlit for browser-based access
+- **Command Line Interface** for automation and scripting
 - **Standalone Executable** - no Python installation required
 
 ## For End Users - Using the Executable
@@ -87,6 +98,20 @@ If you want to run the web app on your local machine:
 
 3. Your web browser will automatically open to the application (usually at `http://localhost:8501`)
 
+### HIPAA Compliance and Client Name Privacy
+
+**Important: When using RALS in web-based deployments or shared environments:**
+
+- By default, the web app (Streamlit) **excludes client names** from the output for HIPAA compliance
+- Client names should only be included when processing files locally on a secure desktop
+- When deploying to public cloud services (Streamlit Cloud, etc.), keep the "Include client names" option **unchecked**
+
+**Recommended Usage:**
+- ✅ **Desktop Executable / GUI**: Safe to include client names (default: checked)
+- ✅ **Command Line Interface**: Safe to include client names (default: included)
+- ⚠️ **Web App (Local)**: Use caution, disable if shared network
+- ❌ **Web App (Cloud)**: Never include client names (default: unchecked)
+
 ### Deploying to Streamlit Community Cloud
 
 To deploy RALS for free online access:
@@ -122,6 +147,51 @@ The web interface provides:
 - Real-time calculation results
 - Downloadable billing summary
 - Responsive design for mobile and desktop
+
+## Output Format
+
+RALS generates an enhanced billing summary Excel file with the following structure:
+
+### Billing Summary Section
+
+**Header Row:**
+```
+Client Name | MRN | Date of Service | Service Type | Payment Date | Charge Amt | Payment Type | Receipt Saved | Comment
+```
+
+**Billing Detail Rows:**
+- One row per service
+- Combined comments for same-day services showing total charge and all service types
+- Individual charge amounts per service
+- Example: `$425.00 1/26 IOP & IT 53+` for two services on the same day
+
+### Service Abbreviations
+
+Services are abbreviated in the comment field:
+- `IOP` - Intensive Outpatient Program
+- `IT 53+` - Individual Therapy 53+ minutes
+- `IT 16-37` - Individual Therapy 16-37 minutes
+- `IT 38-52` - Individual Therapy 38-52 minutes
+- `Psych Eval` - Psychiatric Evaluation
+- `Psych f/u 30-39` - Psychiatric Follow-up 30-39 minutes
+- `Group` - Group Therapy
+- `FT` - Family Therapy
+- `MAT` - Medication Administration
+- `Tele` prefix - Telehealth services (e.g., `Tele IOP`)
+- `NSF` suffix - No Show Fee (e.g., `Psych Eval NSF`)
+
+### Updated PPS Comments Section
+
+After the billing rows, a summary section shows updated PPS tracking comments:
+- One row per unique MRN
+- Updated deductible and OOP amounts reflecting all charges
+- Preserved coinsurance rates and renewal dates
+- Updated "as of" dates to reflect current processing date
+
+**Example PPS Comment:**
+```
+$2,095/$3,500 deductible / $14,425 OOP (combine) used as of 1/27 | 40% coinsurance | Ins Renews 1/2027
+```
 
 ## For Developers
 
