@@ -10,8 +10,34 @@ Insurance rate calculator that processes service appointment data and calculates
 - Applies coinsurance after deductible is met
 - Stops charges when OOP maximum is reached
 - Generates billing summary with running totals
+- **Web Application** - accessible online via Streamlit Community Cloud
 - **GUI Application** for easy use without command line
 - **Standalone Executable** - no Python installation required
+
+## For End Users - Using the Web Application
+
+### Quick Start (Easiest Option)
+
+The easiest way to use RALS is through the web application - no installation required!
+
+**🌐 Access the app**: [RALS Web App](https://rals.streamlit.app) *(Coming soon)*
+
+1. **Upload your Excel file** containing service appointment data
+2. **Enter client name** (optional)
+3. **Configure insurance parameters**:
+   - Deductible (default: $3,272.00)
+   - Coinsurance rate (default: 0.40 = 40%)
+   - Out-of-pocket maximum (default: $6,500.00)
+4. **Click "Calculate Billing"** to process the data
+5. **Download the billing summary** Excel file
+
+### Features
+
+- No installation required - works in your web browser
+- Secure file processing (files are not stored)
+- Same calculation engine as the desktop application
+- Mobile-friendly interface
+- Instant results with summary statistics
 
 ## For End Users - Using the Executable
 
@@ -76,6 +102,9 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 # Install dependencies
 pip install -r requirements.txt
 
+# For Streamlit web app (optional):
+pip install -r requirements-streamlit.txt
+
 # For building executables, also install:
 pip install pyinstaller
 ```
@@ -102,6 +131,32 @@ Run the GUI application during development:
 
 ```bash
 python gui.py
+```
+
+### Streamlit Web Application
+
+Run the Streamlit web application locally:
+
+```bash
+streamlit run streamlit_app.py
+```
+
+The application will open in your default web browser at `http://localhost:8501`.
+
+#### Deploying to Streamlit Community Cloud
+
+1. **Fork the repository** on GitHub
+2. **Sign up** for [Streamlit Community Cloud](https://streamlit.io/cloud)
+3. **Connect your GitHub account** to Streamlit Cloud
+4. **Create a new app** and select your forked repository
+5. **Set the main file path** to `streamlit_app.py`
+6. **Deploy** - your app will be live at `https://[your-app-name].streamlit.app`
+
+**Deployment Notes**:
+- Streamlit Cloud uses `requirements.txt` or `requirements-streamlit.txt` automatically
+- No additional configuration needed
+- The app updates automatically when you push to your repository
+- Free tier includes sufficient resources for typical usage
 ```
 
 ### Building the Executable
