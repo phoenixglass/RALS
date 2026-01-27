@@ -9,9 +9,8 @@ and calculating client billing based on insurance plan parameters.
 import streamlit as st
 import tempfile
 from pathlib import Path
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 import traceback
-import io
 
 from rals import __version__
 from rals.models import InsurancePlan, Client, RateSchedule
@@ -115,11 +114,15 @@ def main():
                 # Show progress
                 with st.spinner("Processing data..."):
                     # Save uploaded file to temporary location
-                    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
-                        tmp_file.write(uploaded_file.getvalue())
-                        tmp_file_path = tmp_file.name
+                    tmp_file_path = None
+                    output_path = None
                     
                     try:
+                        # Create and save uploaded file to temporary location
+                        with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+                            tmp_file.write(uploaded_file.getvalue())
+                            tmp_file_path = tmp_file.name
+                        
                         # Parse input data
                         st.info("📖 Parsing input file...")
                         spreadsheet_parser = SpreadsheetParser()
@@ -166,15 +169,16 @@ def main():
                         with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as output_tmp:
                             output_path = output_tmp.name
                         
-                        generate_billing_report(billing_items, output_path, include_details=False)
-                        
-                        # Read the output file for download
-                        with open(output_path, 'rb') as f:
-                            output_data = f.read()
-                        
-                        # Clean up temporary files
-                        Path(tmp_file_path).unlink(missing_ok=True)
-                        Path(output_path).unlink(missing_ok=True)
+                        try:
+                            generate_billing_report(billing_items, output_path, include_details=False)
+                            
+                            # Read the output file for download
+                            with open(output_path, 'rb') as f:
+                                output_data = f.read()
+                        finally:
+                            # Clean up output file
+                            if output_path:
+                                Path(output_path).unlink(missing_ok=True)
                         
                         # Display results
                         st.markdown("---")
@@ -229,7 +233,8 @@ def main():
                     
                     finally:
                         # Clean up temporary input file
-                        Path(tmp_file_path).unlink(missing_ok=True)
+                        if tmp_file_path:
+                            Path(tmp_file_path).unlink(missing_ok=True)
                         
             except Exception as e:
                 st.error(f"❌ Error processing file: {str(e)}")
