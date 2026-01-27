@@ -53,8 +53,8 @@ class RateCalculator:
         if charge_amount > 0:
             self.client.add_service_to_tracking(service.service_date, service.service_type)
 
-        # Create billing line item
-        return BillingLineItem(
+        # Create billing line item with telehealth and duration info
+        billing_item = BillingLineItem(
             client_name=self.client.name,
             mrn=self.client.mrn,
             date_of_service=service.service_date,
@@ -66,8 +66,16 @@ class RateCalculator:
             coinsurance_amount=coinsurance_amt.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP),
             deductible_remaining_after=self.plan.remaining_deductible,
             oop_remaining_after=self.plan.remaining_oop,
-            comment=self.client.generate_tracking_comment()
+            comment=self.client.generate_tracking_comment(),
+            is_telehealth=service.is_telehealth,
+            duration_code=service.duration_code,
+            short_service_type=service.short_service_type
         )
+
+        # Generate the payment comment automatically
+        billing_item.comment = billing_item.generate_payment_comment()
+
+        return billing_item
 
     def _calculate_breakdown(
         self,
@@ -168,6 +176,7 @@ def parse_rates_from_pps_comment(pps_comment: str) -> RateSchedule:
     # Known rate type patterns (case-insensitive)
     # Maps pattern -> (attribute_name, is_exact_match)
     rate_type_patterns = [
+        (r'\bAssessment\b', 'assessment_rate'),
         (r'\bIOP\b', 'iop_rate'),
         (r'\bGroup\b', 'group_rate'),
         (r'\bIT\b', 'it_rate'),
