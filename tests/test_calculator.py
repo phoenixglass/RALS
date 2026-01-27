@@ -203,6 +203,28 @@ class TestParseRatesFromPPSComment(unittest.TestCase):
         self.assertEqual(schedule.psych_eval_rate, Decimal("350"))
         self.assertEqual(schedule.psych_followup_rate, Decimal("275"))
 
+    def test_parse_full_pps_comment_with_location_and_provider(self):
+        """Test parsing full PPS comment format with location prefix and provider suffix."""
+        comment = "W: Group Room IOP $575 | Group $125 | IT $260 | FT $200 | Psych Eval $350 | Psych flu $275 | MAT $1: Silfen, Jane"
+
+        schedule = parse_rates_from_pps_comment(comment)
+
+        self.assertEqual(schedule.iop_rate, Decimal("575"))
+        self.assertEqual(schedule.group_rate, Decimal("125"))
+        self.assertEqual(schedule.it_rate, Decimal("260"))
+        self.assertEqual(schedule.ft_rate, Decimal("200"))
+        self.assertEqual(schedule.psych_eval_rate, Decimal("350"))
+        self.assertEqual(schedule.psych_followup_rate, Decimal("275"))
+
+    def test_parse_ignores_small_amounts(self):
+        """Test that small amounts like MAT $1 are ignored."""
+        comment = "IOP $575 | MAT $1 | IT $260"
+
+        schedule = parse_rates_from_pps_comment(comment)
+
+        self.assertEqual(schedule.iop_rate, Decimal("575"))
+        self.assertEqual(schedule.it_rate, Decimal("260"))
+
     def test_parse_with_commas(self):
         """Test parsing amounts with comma separators."""
         comment = "IOP $1,575 | IT $1,260"
@@ -221,6 +243,49 @@ class TestParseRatesFromPPSComment(unittest.TestCase):
         self.assertEqual(schedule.iop_rate, Decimal("575"))
         self.assertEqual(schedule.it_rate, Decimal("260"))
         self.assertEqual(schedule.group_rate, Decimal("0"))  # Not specified
+
+    def test_parse_with_decimals(self):
+        """Test parsing amounts with decimal places."""
+        comment = "IOP $575.00 | IT $260.50"
+
+        schedule = parse_rates_from_pps_comment(comment)
+
+        self.assertEqual(schedule.iop_rate, Decimal("575.00"))
+        self.assertEqual(schedule.it_rate, Decimal("260.50"))
+
+    def test_parse_psych_followup_variations(self):
+        """Test parsing various psych follow-up formats."""
+        # Test "Psych flu"
+        comment1 = "Psych flu $275"
+        schedule1 = parse_rates_from_pps_comment(comment1)
+        self.assertEqual(schedule1.psych_followup_rate, Decimal("275"))
+
+        # Test "Psych f/u"
+        comment2 = "Psych f/u $275"
+        schedule2 = parse_rates_from_pps_comment(comment2)
+        self.assertEqual(schedule2.psych_followup_rate, Decimal("275"))
+
+    def test_parse_empty_comment(self):
+        """Test parsing empty or None comment."""
+        schedule = parse_rates_from_pps_comment("")
+        self.assertEqual(schedule.iop_rate, Decimal("0"))
+
+        schedule2 = parse_rates_from_pps_comment(None)
+        self.assertEqual(schedule2.iop_rate, Decimal("0"))
+
+    def test_parse_real_world_example(self):
+        """Test parsing a real-world PPS comment from the spreadsheet."""
+        comment = "W: Group Room IOP $575 | Group $125 | IT $260 | FT $200 | Psych Eval $350 | Psych flu $275 | MAT $1: Tamburri, Cindy  Wu, Jana"
+
+        schedule = parse_rates_from_pps_comment(comment)
+
+        # Should correctly extract all rates
+        self.assertEqual(schedule.iop_rate, Decimal("575"))
+        self.assertEqual(schedule.group_rate, Decimal("125"))
+        self.assertEqual(schedule.it_rate, Decimal("260"))
+        self.assertEqual(schedule.ft_rate, Decimal("200"))
+        self.assertEqual(schedule.psych_eval_rate, Decimal("350"))
+        self.assertEqual(schedule.psych_followup_rate, Decimal("275"))
 
 
 class TestInsurancePlan(unittest.TestCase):

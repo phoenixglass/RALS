@@ -148,7 +148,9 @@ def parse_rates_from_pps_comment(pps_comment: str) -> RateSchedule:
     """
     Parse rate schedule from PPS Comment field.
 
-    Expected format: "... IOP $575 | Group $125 | IT $260 | FT $200 | Psych Eval $350 | Psych flu $275 ..."
+    Expected format examples:
+    - "W: Group Room IOP $575 | Group $125 | IT $260 | FT $200 | Psych Eval $350 | Psych flu $275 | MAT $1: Provider"
+    - "IOP $575 | Group $125 | IT $260"
 
     Args:
         pps_comment: The PPS Comment string containing rate info
@@ -160,30 +162,76 @@ def parse_rates_from_pps_comment(pps_comment: str) -> RateSchedule:
 
     schedule = RateSchedule()
 
-    # Pattern to match rate entries like "IOP $575" or "Psych Eval $350"
-    rate_pattern = r'(\w+(?:\s+\w+)?)\s*\$\s*([\d,]+(?:\.\d{2})?)'
+    if not pps_comment:
+        return schedule
 
-    matches = re.findall(rate_pattern, pps_comment)
+    # Known rate type patterns (case-insensitive)
+    # Maps pattern -> (attribute_name, is_exact_match)
+    rate_type_patterns = [
+        (r'\bIOP\b', 'iop_rate'),
+        (r'\bGroup\b', 'group_rate'),
+        (r'\bIT\b', 'it_rate'),
+        (r'\bFT\b', 'ft_rate'),
+        (r'\bPsych\s*Eval\b', 'psych_eval_rate'),
+        (r'\bPsych\s*flu\b', 'psych_followup_rate'),
+        (r'\bPsych\s*f/u\b', 'psych_followup_rate'),
+        (r'\bPsych\s*Follow\s*-?\s*up\b', 'psych_followup_rate'),
+        (r'\bTelemed\b', 'telemed_rate'),
+        (r'\bEMDR\b', 'emdr_rate'),
+    ]
 
-    for name, amount in matches:
-        name_lower = name.lower().strip()
-        amount_decimal = Decimal(amount.replace(",", ""))
+    # Split by pipe delimiter to get individual rate entries
+    segments = pps_comment.split('|')
 
-        if name_lower == "iop":
-            schedule.iop_rate = amount_decimal
-        elif name_lower == "group":
-            schedule.group_rate = amount_decimal
-        elif name_lower == "it":
-            schedule.it_rate = amount_decimal
-        elif name_lower == "ft":
-            schedule.ft_rate = amount_decimal
-        elif "psych eval" in name_lower:
-            schedule.psych_eval_rate = amount_decimal
-        elif "psych flu" in name_lower or "psych f" in name_lower:
-            schedule.psych_followup_rate = amount_decimal
-        elif name_lower == "telemed":
-            schedule.telemed_rate = amount_decimal
-        elif name_lower == "emdr":
-            schedule.emdr_rate = amount_decimal
+    for segment in segments:
+        segment = segment.strip()
+        if not segment:
+            continue
+
+        # Look for a dollar amount in this segment
+        # Pattern: $XXX or $X,XXX or $XXX.XX
+        amount_match = re.search(r'\$\s*([\d,]+(?:\.\d{2})?)', segment)
+        if not amount_match:
+            continue
+
+        amount_str = amount_match.group(1).replace(",", "")
+        try:
+            amount = Decimal(amount_str)
+        except:
+            continue
+
+        # Skip very small amounts (likely not service rates, e.g., "MAT $1")
+        if amount < Decimal("10"):
+            continue
+
+        # Determine which rate type this is
+        segment_before_dollar = segment[:amount_match.start()].strip()
+
+        for pattern, attr_name in rate_type_patterns:
+            if re.search(pattern, segment_before_dollar, re.IGNORECASE):
+                setattr(schedule, attr_name, amount)
+                break
+
+    # If pipe-delimited parsing didn't find rates, try full string matching
+    # This handles cases where the format might be different
+    if not any([
+        schedule.iop_rate > 0,
+        schedule.it_rate > 0,
+        schedule.group_rate > 0,
+        schedule.psych_eval_rate > 0
+    ]):
+        # Fallback: look for patterns anywhere in the string
+        for pattern, attr_name in rate_type_patterns:
+            # Match pattern followed by dollar amount
+            full_pattern = pattern + r'\s*\$\s*([\d,]+(?:\.\d{2})?)'
+            match = re.search(full_pattern, pps_comment, re.IGNORECASE)
+            if match:
+                amount_str = match.group(1).replace(",", "")
+                try:
+                    amount = Decimal(amount_str)
+                    if amount >= Decimal("10"):  # Skip small amounts
+                        setattr(schedule, attr_name, amount)
+                except:
+                    continue
 
     return schedule
