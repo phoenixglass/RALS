@@ -7,7 +7,7 @@ from typing import Tuple, Optional
 
 from .models import (
     InsurancePlan, BillingLineItem, ServiceRecord, RateSchedule, Client,
-    is_self_pay_virtual, SELF_PAY_VIRTUAL_RATES
+    is_self_pay_virtual, SELF_PAY_VIRTUAL_RATES, is_bundled_with_iop
 )
 
 
@@ -52,7 +52,17 @@ class RateCalculator:
             is_self_pay_virtual(service.pps_comment)
         )
 
-        if is_sp_virtual:
+        # Check if this service is bundled with IOP (no separate charge)
+        is_bundled = service.is_bundled
+
+        if is_bundled:
+            # Bundled IT/FT services with IOP - no charge
+            full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
+            charge_amount = Decimal("0.00")
+            applied_to_ded = Decimal("0.00")
+            coinsurance_amt = Decimal("0.00")
+            # Do NOT update plan accumulators for bundled services
+        elif is_sp_virtual:
             # Use self-pay rates for virtual services - does NOT count toward deductible/OOP
             full_rate = SELF_PAY_VIRTUAL_RATES.get_rate_for_service(service.service_type)
             charge_amount = full_rate
@@ -64,7 +74,7 @@ class RateCalculator:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount, applied_to_ded, coinsurance_amt = self._calculate_breakdown(full_rate)
 
-            # Update plan accumulators (only for insurance, not self-pay)
+            # Update plan accumulators (only for insurance, not self-pay or bundled)
             self.plan.deductible_met += applied_to_ded
             self.plan.oop_accumulated += charge_amount
 
@@ -92,15 +102,16 @@ class RateCalculator:
             is_telehealth=service.is_telehealth,
             duration_code=service.duration_code,
             short_service_type=service.short_service_type,
-            is_self_pay=is_sp_virtual
+            is_self_pay=is_sp_virtual,
+            is_bundled=is_bundled
         )
 
         # Generate the payment comment automatically
         billing_item.comment = billing_item.generate_payment_comment()
 
         # Generate the updated PPS comment with new OOP/deductible values
-        # Only for insurance charges, NOT for self-pay (self-pay doesn't affect OOP/deductible)
-        if service.pps_comment and final_charge > 0 and not is_sp_virtual:
+        # Only for insurance charges, NOT for self-pay or bundled (these don't affect OOP/deductible)
+        if service.pps_comment and final_charge > 0 and not is_sp_virtual and not is_bundled:
             billing_item.updated_pps_comment = generate_updated_pps_comment(
                 service.pps_comment,
                 final_charge,

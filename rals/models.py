@@ -163,6 +163,46 @@ def is_self_pay_virtual(pps_comment: str) -> bool:
     return any(pattern in pps_lower for pattern in sp_patterns)
 
 
+def is_bundled_with_iop(pps_comment: str, physical_proc: str, service_type: str) -> bool:
+    """
+    Check if a service is bundled with IOP and should not be charged separately.
+
+    When the PPS comment includes "In Network:" and the Physical Program column
+    includes "IOP", then IT and FT services are bundled with the IOP program
+    and should not be charged separately.
+
+    Args:
+        pps_comment: The PPS Comment string
+        physical_proc: The Physical Program column value
+        service_type: The service type being checked
+
+    Returns:
+        True if this service is bundled with IOP (no separate charge)
+    """
+    if not pps_comment or not physical_proc:
+        return False
+
+    pps_lower = pps_comment.lower()
+    physical_lower = physical_proc.lower()
+    service_lower = service_type.lower()
+
+    # Check if "In Network:" is in PPS comment and "IOP" is in Physical Program
+    is_in_network_iop = "in network:" in pps_lower and "iop" in physical_lower
+
+    if not is_in_network_iop:
+        return False
+
+    # IT and FT services are bundled with IOP
+    is_it_service = (
+        "individual" in service_lower or
+        ("it" in service_lower and "outpatient" not in service_lower) or
+        "outpatient" in service_lower
+    )
+    is_ft_service = "family" in service_lower or "ft" in service_lower
+
+    return is_it_service or is_ft_service
+
+
 @dataclass
 class ServiceRecord:
     """A single service/appointment record from input data."""
@@ -272,6 +312,15 @@ class ServiceRecord:
         else:
             return "IT"
 
+    @property
+    def is_bundled(self) -> bool:
+        """Check if this service is bundled with IOP (no separate charge).
+
+        When PPS comment has "In Network:" and Physical Program has "IOP",
+        IT and FT services are bundled with IOP and not charged separately.
+        """
+        return is_bundled_with_iop(self.pps_comment, self.physical_proc, self.service_type)
+
 
 @dataclass
 class BillingLineItem:
@@ -301,13 +350,16 @@ class BillingLineItem:
     # Self-pay indicator (for virtual services with no virtual benefits)
     is_self_pay: bool = False
 
+    # Bundled indicator (IT/FT bundled with IOP when In Network)
+    is_bundled: bool = False
+
     # Updated PPS comment (with new OOP/deductible values after this charge)
-    # Empty if self-pay (self-pay charges don't affect OOP/deductible)
+    # Empty if self-pay or bundled (these don't affect OOP/deductible)
     updated_pps_comment: str = ""
 
     def generate_payment_comment(self, payment_date: Optional[date] = None) -> str:
         """
-        Generate a payment comment in the format: $amount date [Tele] service [duration] [SP]
+        Generate a payment comment in the format: $amount date [Tele] service [duration] [SP|Bundled]
 
         Examples:
             - "$200.00 1/26 Tele IOP"
@@ -315,6 +367,7 @@ class BillingLineItem:
             - "$330.00 1/26 IT 53+"
             - "$25.00 1/26 Tele IT 16-37"
             - "$295.00 1/26 Tele IOP SP" (self-pay, no virtual benefits)
+            - "$0.00 1/26 IT Bundled" (IT bundled with IOP, no charge)
 
         Args:
             payment_date: Optional payment date to use (defaults to date_of_service)
@@ -346,6 +399,10 @@ class BillingLineItem:
         # Add SP suffix for self-pay (no virtual benefits)
         if self.is_self_pay:
             parts.append("SP")
+
+        # Add Bundled suffix for services bundled with IOP
+        if self.is_bundled:
+            parts.append("Bundled")
 
         return " ".join(parts)
 
