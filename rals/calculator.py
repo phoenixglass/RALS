@@ -194,6 +194,166 @@ class RateCalculator:
 
         return billing_items
 
+    def calculate_all_services_combined(
+        self,
+        services: list[ServiceRecord],
+        combine_same_day: bool = True
+    ) -> list[BillingLineItem]:
+        """
+        Calculate billing for multiple services, optionally combining same-day services.
+
+        When combine_same_day is True, self-pay services on the same date are combined
+        into a single billing item with a combined comment like "$300.00 1/26 IT & IOP".
+
+        Args:
+            services: List of service records
+            combine_same_day: If True, combine same-day self-pay services
+
+        Returns:
+            List of billing line items (potentially combined)
+        """
+        # First calculate all services individually
+        billing_items = self.calculate_all_services(services)
+
+        if not combine_same_day:
+            return billing_items
+
+        # Combine same-day self-pay items
+        return combine_same_day_billing_items(billing_items)
+
+
+def combine_same_day_billing_items(billing_items: list[BillingLineItem]) -> list[BillingLineItem]:
+    """
+    Update billing items to show combined totals for same-day services.
+
+    When a client has multiple services on the same day, each row keeps its
+    individual service type, but all rows get the same combined comment
+    showing the total amount and all service types.
+
+    Example:
+        Row 1: IOP service, Comment: "$470.00 1/26 IT & IOP"
+        Row 2: IT service, Comment: "$470.00 1/26 IT & IOP"
+
+    Args:
+        billing_items: List of billing line items
+
+    Returns:
+        List of billing line items with combined comments for same-day items
+    """
+    from collections import defaultdict
+
+    if not billing_items:
+        return billing_items
+
+    # Group by (client_mrn, date)
+    grouped = defaultdict(list)
+    for item in billing_items:
+        key = (item.mrn, item.date_of_service)
+        grouped[key].append(item)
+
+    # Update comments for groups with multiple items
+    for (mrn, service_date), items in grouped.items():
+        if len(items) > 1:
+            # Calculate combined totals
+            total_charge = sum(item.charge_amount for item in items)
+
+            # Collect unique service types
+            service_types = []
+            for item in items:
+                short_type = item.short_service_type or item._derive_short_service_type()
+                if short_type not in service_types:
+                    service_types.append(short_type)
+
+            # Determine flags for the combined comment
+            is_telehealth = any(item.is_telehealth for item in items)
+            is_self_pay = any(item.is_self_pay for item in items)
+
+            # Generate combined comment
+            date_str = f"{service_date.month}/{service_date.day}"
+            parts = [f"${total_charge:,.2f}", date_str]
+
+            if is_telehealth:
+                parts.append("Tele")
+
+            parts.append(" & ".join(service_types))
+
+            if is_self_pay:
+                parts.append("SP")
+
+            combined_comment = " ".join(parts)
+
+            # Update all items in this group with the combined comment
+            for item in items:
+                item.comment = combined_comment
+
+    # Return items in original order (sorted by date)
+    billing_items.sort(key=lambda x: x.date_of_service)
+    return billing_items
+
+
+def _combine_billing_items(items: list[BillingLineItem]) -> BillingLineItem:
+    """
+    Combine multiple billing items into a single combined item.
+
+    Args:
+        items: List of billing items to combine (must be same client/date)
+
+    Returns:
+        Combined billing item
+    """
+    if len(items) == 1:
+        return items[0]
+
+    # Use first item as base
+    base = items[0]
+
+    # Sum up charges and amounts
+    total_charge = sum(item.charge_amount for item in items)
+    total_full_rate = sum(item.full_rate for item in items)
+    total_applied_to_ded = sum(item.applied_to_deductible for item in items)
+    total_coinsurance = sum(item.coinsurance_amount for item in items)
+
+    # Collect unique service types for the comment
+    service_types = []
+    for item in items:
+        short_type = item.short_service_type or item._derive_short_service_type()
+        if short_type not in service_types:
+            service_types.append(short_type)
+
+    # Determine flags
+    is_telehealth = any(item.is_telehealth for item in items)
+    is_self_pay = any(item.is_self_pay for item in items)
+    is_bundled = all(item.is_bundled for item in items)  # Only bundled if ALL are bundled
+
+    # Use the last item's remaining values (most up-to-date)
+    last_item = items[-1]
+
+    # Create combined item
+    combined = BillingLineItem(
+        client_name=base.client_name,
+        mrn=base.mrn,
+        date_of_service=base.date_of_service,
+        service_type=" & ".join(service_types),  # Combined service types
+        payment_date=base.payment_date,
+        charge_amount=total_charge,
+        full_rate=total_full_rate,
+        applied_to_deductible=total_applied_to_ded,
+        coinsurance_amount=total_coinsurance,
+        deductible_remaining_after=last_item.deductible_remaining_after,
+        oop_remaining_after=last_item.oop_remaining_after,
+        is_telehealth=is_telehealth,
+        duration_code="",  # No duration code for combined
+        short_service_type=" & ".join(service_types),
+        is_self_pay=is_self_pay,
+        is_bundled=is_bundled,
+        updated_pps_comment=last_item.updated_pps_comment  # Use last update
+    )
+
+    # Generate combined payment comment
+    combined.comment = combined.generate_payment_comment()
+
+    return combined
+
 
 def parse_rates_from_pps_comment(pps_comment: str) -> RateSchedule:
     """
