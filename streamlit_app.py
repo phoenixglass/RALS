@@ -147,6 +147,7 @@ def main():
                     
                     # Create insurance plan
                     insurance_plan = InsurancePlan(
+                        name="Client Insurance Plan",
                         deductible=Decimal(str(deductible)),
                         coinsurance_rate=Decimal(str(coinsurance)),
                         oop_max=Decimal(str(oop_max)),
@@ -155,8 +156,11 @@ def main():
                     )
                     
                     # Create client
+                    # Get MRN from first service record
+                    mrn = services[0].mrn if services and hasattr(services[0], 'mrn') and services[0].mrn else "UNKNOWN"
                     client = Client(
                         name=client_name if client_name else "Client",
+                        mrn=mrn,
                         insurance_plan=insurance_plan
                     )
                     
