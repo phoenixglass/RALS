@@ -29,12 +29,12 @@ def sanitize_filename(name):
 
 def is_non_billable_service(service_type: str) -> bool:
     """
-    Check if a service type is non-billable.
+    Check if a service type is non-billable (costs $0.00).
 
     Non-billable services:
-    - Services starting with RC (RC Client Call, etc.)
-    - Services starting with CC
-    - Services starting with O followed by space (but not Outpatient)
+    - RC Client Call, RC Client Email/Text, RC Bespoke Drug Testing, etc.
+    - CC Check In
+    - O Contact Other Initial, O Contact Other Follow Up
     - Drug Screen services
     """
     if not service_type:
@@ -42,20 +42,25 @@ def is_non_billable_service(service_type: str) -> bool:
 
     service_upper = service_type.strip().upper()
 
-    # RC services (RC Client Call, RC Client Email, etc.)
+    # Specific non-billable services
+    non_billable_patterns = [
+        'RC CLIENT',
+        'RC BESPOKE',
+        'CC CHECK IN',
+        'O CONTACT OTHER',
+        'DRUG SCREEN',
+    ]
+
+    for pattern in non_billable_patterns:
+        if pattern in service_upper:
+            return True
+
+    # RC services (RC followed by space or colon)
     if service_upper.startswith('RC ') or service_upper.startswith('RC:'):
         return True
 
-    # CC services
+    # CC services (CC followed by space or colon)
     if service_upper.startswith('CC ') or service_upper.startswith('CC:'):
-        return True
-
-    # O followed by space (but NOT Outpatient)
-    if service_upper.startswith('O ') and not service_upper.startswith('OUTPATIENT'):
-        return True
-
-    # Drug Screen services
-    if 'DRUG SCREEN' in service_upper:
         return True
 
     return False

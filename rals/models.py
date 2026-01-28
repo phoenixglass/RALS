@@ -216,33 +216,57 @@ class RateSchedule:
     mat_rate: Decimal = Decimal("0.00")  # Medication Assisted Treatment
 
     def get_rate_for_service(self, service_type: str) -> Decimal:
-        """Get the appropriate rate for a service type."""
+        """Get the appropriate rate for a service type.
+
+        Service type to rate mapping:
+        - Assessment, Telemed: Assessment → assessment_rate (fallback: it_rate)
+        - IOP, IOP Huntington, Telemed: IOP → iop_rate
+        - Group → group_rate
+        - Outpatient 53+, Outpatient EMDR 53+, Outpatient 16-37 → it_rate
+        - IT, Individual Therapy → it_rate
+        - FT, Family Therapy → ft_rate
+        - Psych Eval → psych_eval_rate
+        - Psych f/u, Psych Follow-up → psych_followup_rate
+        """
         service_lower = service_type.lower()
 
+        # IOP services (check first to catch "IOP" in various forms)
+        if "iop" in service_lower:
+            return self.iop_rate
+
+        # Assessment services
         if "assessment" in service_lower:
             return self.assessment_rate if self.assessment_rate > 0 else self.it_rate
-        elif "iop" in service_lower:
-            return self.iop_rate
-        elif "emdr" in service_lower:
-            return self.emdr_rate if self.emdr_rate > 0 else self.it_rate
-        elif "telemed" in service_lower and "psych" in service_lower:
-            return self.psych_followup_rate if self.psych_followup_rate > 0 else self.telemed_rate
-        elif "group" in service_lower:
-            # Check for "group" before generic "outpatient" to handle "Outpatient Group" correctly
+
+        # Group services (check before outpatient to handle "Outpatient Group")
+        if "group" in service_lower:
             return self.group_rate
-        elif "outpatient" in service_lower and "53" in service_lower:
-            return self.it_rate  # Outpatient 53+ maps to IT rate
-        elif "outpatient" in service_lower:
+
+        # Outpatient services - ALL map to IT rate (including EMDR variants)
+        # This includes: Outpatient 53+, Outpatient EMDR 53+, Outpatient 16-37 minutes
+        if "outpatient" in service_lower:
             return self.it_rate
-        elif "psych eval" in service_lower:
+
+        # Psych services
+        if "psych eval" in service_lower:
             return self.psych_eval_rate
-        elif "family" in service_lower or "ft" in service_lower:
+        if "psych f" in service_lower or "psych follow" in service_lower:
+            return self.psych_followup_rate
+
+        # Family Therapy
+        if "family" in service_lower or service_lower.startswith("ft "):
             return self.ft_rate
-        elif "individual" in service_lower or "it" in service_lower:
+
+        # Individual Therapy
+        if "individual" in service_lower or service_lower.startswith("it "):
             return self.it_rate
-        else:
-            # Default to IT rate
-            return self.it_rate
+
+        # Telemed services with psych
+        if "telemed" in service_lower and "psych" in service_lower:
+            return self.psych_followup_rate if self.psych_followup_rate > 0 else self.it_rate
+
+        # Default to IT rate
+        return self.it_rate
 
 
 # Default self-pay rates for virtual services (when client has no virtual benefits)
