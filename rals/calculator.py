@@ -55,6 +55,9 @@ class RateCalculator:
         # Check if this service is bundled with IOP (no separate charge)
         is_bundled = service.is_bundled
 
+        # Track if deductible becomes met with this charge
+        deductible_now_met = False
+
         if is_bundled:
             # Bundled IT/FT services with IOP - no charge
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
@@ -72,11 +75,18 @@ class RateCalculator:
         else:
             # Normal insurance calculation
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
+
+            # Check if deductible was NOT met before this charge
+            deductible_was_not_met = not self.plan.deductible_satisfied
+
             charge_amount, applied_to_ded, coinsurance_amt = self._calculate_breakdown(full_rate)
 
             # Update plan accumulators (only for insurance, not self-pay or bundled)
             self.plan.deductible_met += applied_to_ded
             self.plan.oop_accumulated += charge_amount
+
+            # Check if deductible IS met after this charge (transition happened)
+            deductible_now_met = deductible_was_not_met and self.plan.deductible_satisfied
 
         # Track for comment generation
         if charge_amount > 0:
@@ -117,7 +127,9 @@ class RateCalculator:
             billing_item.updated_pps_comment = generate_updated_pps_comment(
                 service.pps_comment,
                 final_charge,
-                None  # Use today's date for "as of" date
+                None,  # Use today's date for "as of" date
+                self.plan.coinsurance_rate,
+                deductible_now_met
             )
 
         return billing_item
@@ -584,23 +596,34 @@ def parse_deductible_from_pps_comment(pps_comment: str) -> Tuple[Optional[Decima
 def generate_updated_pps_comment(
     original_pps: str,
     charge_amount: Decimal,
-    new_date: Optional[date] = None
+    new_date: Optional[date] = None,
+    coinsurance_rate: Optional[Decimal] = None,
+    deductible_now_met: bool = False
 ) -> str:
     """
     Generate an updated PPS Comment with new OOP and/or deductible values.
 
-    This updates the OOP used amount by adding the charge_amount and updates
-    the "as of" date to the new date (defaults to today).
+    For combined deductible/OOP tracking:
+    - While deductible not met: Update deductible amount, keep full rates
+    - When deductible becomes met: Remove deductible section, update rates to
+      coinsurance amounts, convert OOP from (combine) to standard format
 
-    Example:
-        Original: "IOP $300 | ... | $2,911/ $3,350 OOP used as of 1/23 | ..."
-        After $300 charge on 1/27:
-        Updated:  "IOP $300 | ... | $3,211/ $3,350 OOP used as of 1/27 | ..."
+    Example (deductible not yet met):
+        Original: "IOP $600 | $440/$3,400 deductible /$17,000 OOP (combine) used as of 1/28"
+        After $110 charge:
+        Updated:  "IOP $600 | $550/$3,400 deductible /$17,000 OOP (combine) used as of 1/28"
+
+    Example (deductible now met):
+        Original: "IOP $600 | $3,290/$3,400 deductible /$17,000 OOP (combine) used as of 1/28 | 40% coinsurance"
+        After $200 charge (110 to ded + 36 coinsurance):
+        Updated:  "IOP $240 | $3,446/$17,000 OOP used as of 1/28 | Ins Renews..."
 
     Args:
         original_pps: The original PPS Comment string
         charge_amount: The amount charged to the patient
         new_date: The date to use for "as of" (defaults to today)
+        coinsurance_rate: Coinsurance rate for updating rates (e.g., 0.40 for 40%)
+        deductible_now_met: If True, deductible was met with this charge - transform PPS
 
     Returns:
         Updated PPS Comment string
@@ -611,21 +634,46 @@ def generate_updated_pps_comment(
     if new_date is None:
         new_date = date.today()
 
-    # Format date as M/DD (no leading zero on month, but keep day as-is)
     new_date_str = f"{new_date.month}/{new_date.day}"
-
     updated_pps = original_pps
 
-    # Update OOP section - standard format with used/max
+    # Check if this is a combined deductible/OOP format
+    is_combined = '(combine)' in original_pps.lower()
+
+    # Parse current values
+    ded_met, ded_total, _ = parse_deductible_from_pps_comment(original_pps)
     oop_used, oop_max, _ = parse_oop_from_pps_comment(original_pps)
-    if oop_used is not None and oop_max is not None:
-        new_oop_used = oop_used + charge_amount
 
-        # Build the pattern to find and replace the OOP section
-        oop_pattern = r'\$\s*[\d,]+(?:\.\d{1,2})?\s*/\s*\$?\s*[\d,]+(?:\.\d{1,2})?\s*OOP(?:\s*\(combine\))?\s+used\s+as\s+of\s+\d{1,2}/\d{1,2}(?:/\d{2,4})?'
+    # Get coinsurance rate from PPS if not provided
+    if coinsurance_rate is None:
+        coins_match = re.search(r'(\d+)%\s*coinsurance', original_pps, re.IGNORECASE)
+        if coins_match:
+            coinsurance_rate = Decimal(coins_match.group(1)) / Decimal('100')
+        else:
+            coinsurance_rate = Decimal('0.40')  # Default 40%
 
-        # Format the new OOP section
-        # Format amounts with commas but no decimal if whole number
+    # Case 1: Deductible is now fully met - transform the PPS comment
+    if deductible_now_met and ded_total is not None and coinsurance_rate is not None:
+        # Update all rates to coinsurance amounts
+        updated_pps = _update_rates_to_coinsurance(updated_pps, coinsurance_rate)
+
+        # Calculate new OOP used (deductible total + any coinsurance from this charge)
+        new_oop_used = ded_total + charge_amount
+        if oop_max is None:
+            oop_max = Decimal("10000")  # Default
+
+        # Remove deductible section and coinsurance mention
+        updated_pps = re.sub(
+            r'\$\s*[\d,]+(?:\.\d{1,2})?\s*/\s*\$?\s*[\d,]+(?:\.\d{1,2})?\s*deductible\s*',
+            '',
+            updated_pps,
+            flags=re.IGNORECASE
+        )
+        updated_pps = re.sub(r'\|\s*\d+%\s*coinsurance\s*', '', updated_pps, flags=re.IGNORECASE)
+
+        # Replace OOP (combine) format with standard OOP format
+        oop_combine_pattern = r'/\s*\$?\s*[\d,]+(?:\.\d{1,2})?\s*OOP\s*\(combine\)\s+used\s+as\s+of\s+\d{1,2}/\d{1,2}(?:/\d{2,4})?'
+
         if new_oop_used == new_oop_used.to_integral_value():
             new_oop_used_str = f"${int(new_oop_used):,}"
         else:
@@ -636,49 +684,112 @@ def generate_updated_pps_comment(
         else:
             oop_max_str = f"${oop_max:,.2f}"
 
-        new_oop_section = f"{new_oop_used_str}/ {oop_max_str} OOP used as of {new_date_str}"
+        new_oop_section = f"{new_oop_used_str}/{oop_max_str} OOP used as of {new_date_str}"
+        updated_pps = re.sub(oop_combine_pattern, new_oop_section, updated_pps, flags=re.IGNORECASE)
 
-        updated_pps = re.sub(oop_pattern, new_oop_section, updated_pps, flags=re.IGNORECASE)
+        # Clean up multiple pipes
+        updated_pps = re.sub(r'\|\s*\|', '|', updated_pps)
+        updated_pps = re.sub(r'\s+\|', ' |', updated_pps)
 
-    elif oop_max is not None:
-        # Handle "(combine)" format - just update the date
-        oop_combine_pattern = r'/\s*\$?\s*[\d,]+(?:\.\d{1,2})?\s*OOP\s*\(combine\)\s+used\s+as\s+of\s+\d{1,2}/\d{1,2}(?:/\d{2,4})?'
+        return updated_pps.strip()
+
+    # Case 2: Standard update - deductible not yet met
+    if ded_met is not None and ded_total is not None and ded_met < ded_total:
+        remaining_ded = ded_total - ded_met
+        applied_to_ded = min(charge_amount, remaining_ded)
+        new_ded_met = ded_met + applied_to_ded
+
+        ded_pattern = r'\$\s*[\d,]+(?:\.\d{1,2})?\s*/\s*\$?\s*[\d,]+(?:\.\d{1,2})?\s*deductible'
+
+        if new_ded_met == new_ded_met.to_integral_value():
+            new_ded_met_str = f"${int(new_ded_met):,}"
+        else:
+            new_ded_met_str = f"${new_ded_met:,.2f}"
+
+        if ded_total == ded_total.to_integral_value():
+            ded_total_str = f"${int(ded_total):,}"
+        else:
+            ded_total_str = f"${ded_total:,.2f}"
+
+        new_ded_section = f"{new_ded_met_str}/{ded_total_str} deductible"
+        updated_pps = re.sub(ded_pattern, new_ded_section, updated_pps, flags=re.IGNORECASE)
+
+        # For combined format, also update the date
+        if is_combined:
+            date_pattern = r'used\s+as\s+of\s+\d{1,2}/\d{1,2}(?:/\d{2,4})?'
+            updated_pps = re.sub(date_pattern, f"used as of {new_date_str}", updated_pps, flags=re.IGNORECASE)
+
+    # Case 3: Deductible already met, just update OOP
+    elif oop_used is not None and oop_max is not None:
+        new_oop_used = oop_used + charge_amount
+
+        oop_pattern = r'\$\s*[\d,]+(?:\.\d{1,2})?\s*/\s*\$?\s*[\d,]+(?:\.\d{1,2})?\s*OOP(?:\s*\(combine\))?\s+used\s+as\s+of\s+\d{1,2}/\d{1,2}(?:/\d{2,4})?'
+
+        if new_oop_used == new_oop_used.to_integral_value():
+            new_oop_used_str = f"${int(new_oop_used):,}"
+        else:
+            new_oop_used_str = f"${new_oop_used:,.2f}"
 
         if oop_max == oop_max.to_integral_value():
             oop_max_str = f"${int(oop_max):,}"
         else:
             oop_max_str = f"${oop_max:,.2f}"
 
-        new_oop_combine_section = f"/{oop_max_str} OOP (combine) used as of {new_date_str}"
-
-        updated_pps = re.sub(oop_combine_pattern, new_oop_combine_section, updated_pps, flags=re.IGNORECASE)
-
-    # Update deductible section if present and if charge applies to deductible
-    ded_met, ded_total, _ = parse_deductible_from_pps_comment(original_pps)
-    if ded_met is not None and ded_total is not None:
-        # Only update deductible if it's not fully met
-        if ded_met < ded_total:
-            # Calculate how much applies to deductible
-            remaining_ded = ded_total - ded_met
-            applied_to_ded = min(charge_amount, remaining_ded)
-            new_ded_met = ded_met + applied_to_ded
-
-            # Build the pattern to find and replace the deductible section
-            ded_pattern = r'\$\s*[\d,]+(?:\.\d{1,2})?\s*/\s*\$?\s*[\d,]+(?:\.\d{1,2})?\s*deductible'
-
-            # Format the new deductible section
-            if new_ded_met == new_ded_met.to_integral_value():
-                new_ded_met_str = f"${int(new_ded_met):,}"
-            else:
-                new_ded_met_str = f"${new_ded_met:,.2f}"
-
-            if ded_total == ded_total.to_integral_value():
-                ded_total_str = f"${int(ded_total):,}"
-            else:
-                ded_total_str = f"${ded_total:,.2f}"
-
-            new_ded_section = f"{new_ded_met_str}/{ded_total_str} deductible"
-
-            updated_pps = re.sub(ded_pattern, new_ded_section, updated_pps, flags=re.IGNORECASE)
+        new_oop_section = f"{new_oop_used_str}/{oop_max_str} OOP used as of {new_date_str}"
+        updated_pps = re.sub(oop_pattern, new_oop_section, updated_pps, flags=re.IGNORECASE)
 
     return updated_pps
+
+
+def _update_rates_to_coinsurance(pps_comment: str, coinsurance_rate: Decimal) -> str:
+    """
+    Update all rates in a PPS comment to coinsurance amounts.
+
+    Example: "IOP $600 | Group $110 | IT $330" with 40% coinsurance becomes
+             "IOP $240 | Group $44 | IT $132"
+
+    Args:
+        pps_comment: Original PPS comment
+        coinsurance_rate: Coinsurance rate (e.g., 0.40 for 40%)
+
+    Returns:
+        PPS comment with updated rates
+    """
+    # Rate patterns to find and update
+    rate_patterns = [
+        (r'Assessment\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'Assessment'),
+        (r'IOP\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'IOP'),
+        (r'Group\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'Group'),
+        (r'\bIT\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'IT'),
+        (r'\bFT\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'FT'),
+        (r'Psych\s*Eval\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'Psych Eval'),
+        (r'Psych\s*f/u\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'Psych f/u'),
+        (r'MAT\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'MAT'),
+        (r'Fam\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'Fam'),
+        (r'OP/IT\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'OP/IT'),
+        (r'Intake\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'Intake'),
+        (r'Psych\s*E\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'Psych E'),
+        (r'MATS\s*\$\s*([\d,]+(?:\.\d{1,2})?)', 'MATS'),
+    ]
+
+    updated = pps_comment
+
+    for pattern, label in rate_patterns:
+        match = re.search(pattern, updated, re.IGNORECASE)
+        if match:
+            original_rate_str = match.group(1).replace(',', '')
+            try:
+                original_rate = Decimal(original_rate_str)
+                new_rate = (original_rate * coinsurance_rate).quantize(Decimal('1'))
+
+                # Format new rate
+                new_rate_str = f"${int(new_rate):,}" if new_rate == new_rate.to_integral_value() else f"${new_rate:,.2f}"
+
+                # Replace in string
+                old_text = match.group(0)
+                new_text = f"{label} {new_rate_str}"
+                updated = updated.replace(old_text, new_text, 1)
+            except:
+                pass
+
+    return updated

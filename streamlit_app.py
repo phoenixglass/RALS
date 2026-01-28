@@ -34,7 +34,7 @@ def is_non_billable_service(service_type: str) -> bool:
     Non-billable services:
     - Services starting with RC (RC Client Call, etc.)
     - Services starting with CC
-    - Services starting with O (but not Outpatient - those are billable)
+    - Services starting with O followed by space (but not Outpatient)
     - Drug Screen services
     """
     if not service_type:
@@ -48,6 +48,10 @@ def is_non_billable_service(service_type: str) -> bool:
 
     # CC services
     if service_upper.startswith('CC ') or service_upper.startswith('CC:'):
+        return True
+
+    # O followed by space (but NOT Outpatient)
+    if service_upper.startswith('O ') and not service_upper.startswith('OUTPATIENT'):
         return True
 
     # Drug Screen services
