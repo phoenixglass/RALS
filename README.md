@@ -4,6 +4,7 @@ Insurance rate calculator that processes service appointment data and calculates
 
 ## Features
 
+### Core Functionality
 - Parses service appointment data from spreadsheet rows
 - Extracts rates from PPS Comment field
 - Tracks deductible accumulation across services
@@ -12,6 +13,8 @@ Insurance rate calculator that processes service appointment data and calculates
 - Generates billing summary with running totals
 - **Web Application** - accessible online via Streamlit Community Cloud
 - **GUI Application** for easy use without command line
+- **Web Application** via Streamlit for browser-based access
+- **Command Line Interface** for automation and scripting
 - **Standalone Executable** - no Python installation required
 
 ## For End Users - Using the Web Application
@@ -85,6 +88,128 @@ The easiest way to use RALS is through the web application - no installation req
 **File format errors**
 - Ensure your input file is a valid Excel (.xlsx or .xls) file
 - Check that the file contains service data in the expected format
+
+## Using the Web App
+
+RALS can also be accessed through a web browser without any installation, making it easy to use from any device.
+
+### Benefits
+
+- **No Installation Required**: Access RALS directly from your web browser
+- **Cross-Platform**: Works on Windows, macOS, Linux, tablets, and smartphones
+- **Always Up-to-Date**: Use the latest version without manual updates
+- **Easy Sharing**: Share the web app link with team members
+
+### Running Locally
+
+If you want to run the web app on your local machine:
+
+1. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+2. Launch the Streamlit app:
+   ```bash
+   streamlit run streamlit_app.py
+   ```
+
+3. Your web browser will automatically open to the application (usually at `http://localhost:8501`)
+
+### HIPAA Compliance and Client Name Privacy
+
+**Important: When using RALS in web-based deployments or shared environments:**
+
+- By default, the web app (Streamlit) **excludes client names** from the output for HIPAA compliance
+- Client names should only be included when processing files locally on a secure desktop
+- When deploying to public cloud services (Streamlit Cloud, etc.), keep the "Include client names" option **unchecked**
+
+**Recommended Usage:**
+- ✅ **Desktop Executable / GUI**: Safe to include client names (default: checked)
+- ✅ **Command Line Interface**: Safe to include client names (default: included)
+- ⚠️ **Web App (Local)**: Use caution, disable if shared network
+- ❌ **Web App (Cloud)**: Never include client names (default: unchecked)
+
+### Deploying to Streamlit Community Cloud
+
+To deploy RALS for free online access:
+
+1. **Sign up for Streamlit Community Cloud**
+   - Go to [share.streamlit.io](https://share.streamlit.io)
+   - Sign in with your GitHub account
+
+2. **Deploy the app**
+   - Click "New app"
+   - Select the `phoenixglass/RALS` repository
+   - Choose the main/default branch
+   - Set the main file path to `streamlit_app.py`
+   - Click "Deploy"
+
+3. **Share the URL**
+   - Once deployed, you'll receive a unique URL (e.g., `https://your-app.streamlit.app`)
+   - Share this URL with anyone who needs to use RALS
+
+### Other Deployment Options
+
+RALS can also be deployed to other free hosting platforms:
+
+- **Hugging Face Spaces**: Free hosting for ML and data apps
+- **Render**: Free tier available for web services
+- **Railway**: Free starter plan with easy deployment
+
+### Web App Features
+
+The web interface provides:
+- File upload for Excel spreadsheets
+- Interactive input fields for insurance parameters
+- Real-time calculation results
+- Downloadable billing summary
+- Responsive design for mobile and desktop
+
+## Output Format
+
+RALS generates an enhanced billing summary Excel file with the following structure:
+
+### Billing Summary Section
+
+**Header Row:**
+```
+Client Name | MRN | Date of Service | Service Type | Payment Date | Charge Amt | Payment Type | Receipt Saved | Comment
+```
+
+**Billing Detail Rows:**
+- One row per service
+- Combined comments for same-day services showing total charge and all service types
+- Individual charge amounts per service
+- Example: `$425.00 1/26 IOP & IT 53+` for two services on the same day
+
+### Service Abbreviations
+
+Services are abbreviated in the comment field:
+- `IOP` - Intensive Outpatient Program
+- `IT 53+` - Individual Therapy 53+ minutes
+- `IT 16-37` - Individual Therapy 16-37 minutes
+- `IT 38-52` - Individual Therapy 38-52 minutes
+- `Psych Eval` - Psychiatric Evaluation
+- `Psych f/u 30-39` - Psychiatric Follow-up 30-39 minutes
+- `Group` - Group Therapy
+- `FT` - Family Therapy
+- `MAT` - Medication Administration
+- `Tele` prefix - Telehealth services (e.g., `Tele IOP`)
+- `NSF` suffix - No Show Fee (e.g., `Psych Eval NSF`)
+
+### Updated PPS Comments Section
+
+After the billing rows, a summary section shows updated PPS tracking comments:
+- One row per unique MRN
+- Updated deductible and OOP amounts reflecting all charges
+- Preserved coinsurance rates and renewal dates
+- Updated "as of" dates to reflect current processing date
+
+**Example PPS Comment:**
+```
+$2,095/$3,500 deductible / $14,425 OOP (combine) used as of 1/27 | 40% coinsurance | Ins Renews 1/2027
+```
 
 ## For Developers
 

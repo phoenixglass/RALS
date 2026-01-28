@@ -88,6 +88,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--copay",
+        type=Decimal,
+        default=None,
+        help="Copay amount (if set, used instead of coinsurance). Copay does NOT count toward deductible but DOES count toward OOP."
+    )
+
+    parser.add_argument(
         "--start-row",
         type=int,
         default=2,
@@ -113,6 +120,12 @@ Examples:
         help="Print summary to console"
     )
 
+    parser.add_argument(
+        "--exclude-names",
+        action="store_true",
+        help="Exclude client names from output for HIPAA compliance (default: names are included)"
+    )
+
     # Rate overrides
     parser.add_argument("--iop-rate", type=Decimal, help="Override IOP rate")
     parser.add_argument("--it-rate", type=Decimal, help="Override Individual Therapy rate")
@@ -122,6 +135,9 @@ Examples:
     parser.add_argument("--psych-followup-rate", type=Decimal, help="Override Psych Follow-up rate")
 
     args = parser.parse_args()
+    
+    # Handle client name privacy flag (default is to include names)
+    include_client_names = not args.exclude_names
 
     # Validate input file
     input_path = Path(args.input_file)
@@ -184,14 +200,18 @@ Examples:
         coinsurance_rate=args.coinsurance,
         oop_max=args.oop_max,
         deductible_met=args.deductible_met,
-        oop_accumulated=args.oop_accumulated
+        oop_accumulated=args.oop_accumulated,
+        copay=args.copay
     )
 
     print(f"\nInsurance plan:")
     print(f"  Deductible: ${insurance_plan.deductible:,.2f}")
     print(f"  Already met: ${insurance_plan.deductible_met:,.2f}")
     print(f"  Remaining: ${insurance_plan.remaining_deductible:,.2f}")
-    print(f"  Coinsurance: {insurance_plan.coinsurance_rate * 100:.0f}%")
+    if insurance_plan.has_copay:
+        print(f"  Copay: ${insurance_plan.copay:,.2f} (does NOT count toward deductible, DOES count toward OOP)")
+    else:
+        print(f"  Coinsurance: {insurance_plan.coinsurance_rate * 100:.0f}%")
     print(f"  OOP Max: ${insurance_plan.oop_max:,.2f}")
 
     # Create client
@@ -208,7 +228,12 @@ Examples:
 
     # Generate output
     output_path = Path(args.output)
-    generate_billing_report(billing_items, output_path, include_details=args.details)
+    generate_billing_report(
+        billing_items, 
+        output_path, 
+        include_details=args.details,
+        include_client_names=include_client_names
+    )
     print(f"\nBilling summary written to: {output_path}")
 
     # Print summary if requested
