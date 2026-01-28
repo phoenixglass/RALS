@@ -56,23 +56,34 @@ def process_batch(services, parser):
                 errors.append(f"MRN {mrn}: No PPS Comment found, skipping")
                 continue
 
+            # Check if self-pay client
+            is_self_pay = 'self-pay' in pps_comment.lower() or 'self pay' in pps_comment.lower()
+
             # Extract rate schedule from PPS comment
             rate_schedule = parser.extract_rate_schedule(client_services)
 
             # Extract insurance parameters from PPS comment
             ded_total, ded_met, oop_max, oop_used, coinsurance_rate = parser.extract_insurance_params_from_pps(pps_comment)
 
-            # Use defaults if not found in PPS comment
-            if ded_total is None:
+            # For self-pay clients, patient pays full rate (no deductible/coinsurance)
+            if is_self_pay:
                 ded_total = Decimal("0")
-            if ded_met is None:
                 ded_met = Decimal("0")
-            if oop_max is None:
-                oop_max = Decimal("999999")  # Effectively unlimited
-            if oop_used is None:
+                oop_max = Decimal("999999")
                 oop_used = Decimal("0")
-            if coinsurance_rate is None:
-                coinsurance_rate = Decimal("0.40")  # Default 40%
+                coinsurance_rate = Decimal("1.0")  # 100% patient responsibility
+            else:
+                # Use defaults if not found in PPS comment
+                if ded_total is None:
+                    ded_total = Decimal("0")
+                if ded_met is None:
+                    ded_met = Decimal("0")
+                if oop_max is None:
+                    oop_max = Decimal("10000")  # Reasonable default
+                if oop_used is None:
+                    oop_used = Decimal("0")
+                if coinsurance_rate is None:
+                    coinsurance_rate = Decimal("0.40")  # Default 40%
 
             # Create insurance plan with extracted parameters
             insurance_plan = InsurancePlan(

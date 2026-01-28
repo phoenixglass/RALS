@@ -471,50 +471,61 @@ def parse_oop_from_pps_comment(pps_comment: str) -> Tuple[Optional[Decimal], Opt
     """
     Parse OOP (Out of Pocket) information from PPS Comment.
 
-    Expected formats:
+    Supported formats:
     - "$2,911/ $3,350 OOP used as of 1/23"
     - "$2,911/$3,350 OOP used as of 1/23"
-    - "/$18,200 OOP (combine) used as of 1/26" (OOP-only tracking, no used amount shown)
+    - "/$18,200 OOP (combine) used as of 1/26"
+    - "OOPM $3750" (just max, no used amount)
+    - "OOPM $2,252.89: $240 met as of 11/28" (max with amount met)
 
     Args:
         pps_comment: The PPS Comment string
 
     Returns:
         Tuple of (oop_used, oop_max, as_of_date_str) or (None, None, None) if not found
-        Note: oop_used may be None for "combine" format where only max is shown
     """
     if not pps_comment:
         return None, None, None
 
     # Pattern 1: $amount/ $amount OOP used as of date
     pattern = r'\$\s*([\d,]+(?:\.\d{1,2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{1,2})?)\s*OOP(?:\s*\(combine\))?\s+used\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
-
     match = re.search(pattern, pps_comment, re.IGNORECASE)
     if match:
-        oop_used_str = match.group(1).replace(",", "")
-        oop_max_str = match.group(2).replace(",", "")
-        date_str = match.group(3)
-
         try:
-            oop_used = Decimal(oop_used_str)
-            oop_max = Decimal(oop_max_str)
-            return oop_used, oop_max, date_str
+            oop_used = Decimal(match.group(1).replace(",", ""))
+            oop_max = Decimal(match.group(2).replace(",", ""))
+            return oop_used, oop_max, match.group(3)
         except:
             pass
 
-    # Pattern 2: /$amount OOP (combine) used as of date (no used amount, just max)
+    # Pattern 2: /$amount OOP (combine) used as of date
     pattern2 = r'/\s*\$?\s*([\d,]+(?:\.\d{1,2})?)\s*OOP\s*\(combine\)\s+used\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
-
     match2 = re.search(pattern2, pps_comment, re.IGNORECASE)
     if match2:
-        oop_max_str = match2.group(1).replace(",", "")
-        date_str = match2.group(2)
-
         try:
-            oop_max = Decimal(oop_max_str)
-            # For combined tracking, we return None for oop_used
-            # The actual OOP used is tracked via deductible
-            return None, oop_max, date_str
+            oop_max = Decimal(match2.group(1).replace(",", ""))
+            return None, oop_max, match2.group(2)
+        except:
+            pass
+
+    # Pattern 3: OOPM $amount: $amount met as of date (e.g., "OOPM $2,252.89: $240 met as of 11/28")
+    pattern3 = r'OOPM?\s*\$\s*([\d,]+(?:\.\d{1,2})?)\s*:\s*\$\s*([\d,]+(?:\.\d{1,2})?)\s*met\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+    match3 = re.search(pattern3, pps_comment, re.IGNORECASE)
+    if match3:
+        try:
+            oop_max = Decimal(match3.group(1).replace(",", ""))
+            oop_used = Decimal(match3.group(2).replace(",", ""))
+            return oop_used, oop_max, match3.group(3)
+        except:
+            pass
+
+    # Pattern 4: OOPM $amount (just max, no used amount, e.g., "OOPM $3750")
+    pattern4 = r'OOPM?\s*\$\s*([\d,]+(?:\.\d{1,2})?)'
+    match4 = re.search(pattern4, pps_comment, re.IGNORECASE)
+    if match4:
+        try:
+            oop_max = Decimal(match4.group(1).replace(",", ""))
+            return Decimal("0"), oop_max, None
         except:
             pass
 
@@ -525,8 +536,10 @@ def parse_deductible_from_pps_comment(pps_comment: str) -> Tuple[Optional[Decima
     """
     Parse deductible information from PPS Comment.
 
-    Expected format: "$1,732.50/$3,500 deductible"
-    or with OOP combined: "$1,732.50/$3,500 deductible| /$18,200 OOP (combine) used as of 1/26"
+    Supported formats:
+    - "$1,732.50/$3,500 deductible"
+    - "$1,732.50/$3,500 deductible| /$18,200 OOP (combine) used as of 1/26"
+    - "Ded $1,721.27" (just amount met, no total)
 
     Args:
         pps_comment: The PPS Comment string
@@ -537,24 +550,31 @@ def parse_deductible_from_pps_comment(pps_comment: str) -> Tuple[Optional[Decima
     if not pps_comment:
         return None, None, None
 
-    # Pattern: $amount/$amount deductible
+    # Pattern 1: $amount/$amount deductible
     pattern = r'\$\s*([\d,]+(?:\.\d{1,2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{1,2})?)\s*deductible'
-
     match = re.search(pattern, pps_comment, re.IGNORECASE)
     if match:
-        ded_met_str = match.group(1).replace(",", "")
-        ded_total_str = match.group(2).replace(",", "")
-
         try:
-            ded_met = Decimal(ded_met_str)
-            ded_total = Decimal(ded_total_str)
+            ded_met = Decimal(match.group(1).replace(",", ""))
+            ded_total = Decimal(match.group(2).replace(",", ""))
 
-            # Try to find associated date (might be after OOP section)
+            # Try to find associated date
             date_pattern = r'used\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
             date_match = re.search(date_pattern, pps_comment, re.IGNORECASE)
             date_str = date_match.group(1) if date_match else None
 
             return ded_met, ded_total, date_str
+        except:
+            pass
+
+    # Pattern 2: "Ded $amount" (just amount met, assume deductible is fully met)
+    pattern2 = r'\bDed\s*\$\s*([\d,]+(?:\.\d{1,2})?)'
+    match2 = re.search(pattern2, pps_comment, re.IGNORECASE)
+    if match2:
+        try:
+            ded_met = Decimal(match2.group(1).replace(",", ""))
+            # Assume deductible is fully met (total = met)
+            return ded_met, ded_met, None
         except:
             pass
 
