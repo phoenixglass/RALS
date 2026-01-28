@@ -27,6 +27,45 @@ def sanitize_filename(name):
     return safe_name if safe_name else "output"
 
 
+def is_non_billable_service(service_type: str) -> bool:
+    """
+    Check if a service type is non-billable (costs $0.00).
+
+    Non-billable services:
+    - RC Client Call, RC Client Email/Text, RC Bespoke Drug Testing, etc.
+    - CC Check In
+    - O Contact Other Initial, O Contact Other Follow Up
+    - Drug Screen services
+    """
+    if not service_type:
+        return True
+
+    service_upper = service_type.strip().upper()
+
+    # Specific non-billable services
+    non_billable_patterns = [
+        'RC CLIENT',
+        'RC BESPOKE',
+        'CC CHECK IN',
+        'O CONTACT OTHER',
+        'DRUG SCREEN',
+    ]
+
+    for pattern in non_billable_patterns:
+        if pattern in service_upper:
+            return True
+
+    # RC services (RC followed by space or colon)
+    if service_upper.startswith('RC ') or service_upper.startswith('RC:'):
+        return True
+
+    # CC services (CC followed by space or colon)
+    if service_upper.startswith('CC ') or service_upper.startswith('CC:'):
+        return True
+
+    return False
+
+
 def process_batch(services, parser):
     """
     Process multiple clients from a single spreadsheet.
@@ -42,12 +81,24 @@ def process_batch(services, parser):
 
     all_billing_items = []
     errors = []
+    skipped_services = 0
 
     for mrn, client_services in grouped.items():
         try:
+            # Filter out non-billable services
+            billable_services = [
+                svc for svc in client_services
+                if not is_non_billable_service(svc.service_type)
+            ]
+            skipped_services += len(client_services) - len(billable_services)
+
+            if not billable_services:
+                errors.append(f"MRN {mrn}: No billable services found")
+                continue
+
             # Get the first service record with a PPS comment for this client
             pps_comment = None
-            for svc in client_services:
+            for svc in client_services:  # Check all services for PPS comment
                 if svc.pps_comment:
                     pps_comment = svc.pps_comment
                     break
@@ -56,11 +107,48 @@ def process_batch(services, parser):
                 errors.append(f"MRN {mrn}: No PPS Comment found, skipping")
                 continue
 
+            # Check if self-pay client (Telemed: Self-Pay or Self-pay in comment)
+            is_self_pay = (
+                'self-pay' in pps_comment.lower() or
+                'self pay' in pps_comment.lower() or
+                'telemed: self-pay' in pps_comment.lower()
+            )
+
+            # Self-pay clients: skip insurance calculation entirely
+            if is_self_pay:
+                # For self-pay, just use the rates directly - no deductible/OOP tracking
+                rate_schedule = parser.extract_rate_schedule(billable_services)
+
+                insurance_plan = InsurancePlan(
+                    name="Self-Pay",
+                    deductible=Decimal("0"),
+                    coinsurance_rate=Decimal("1.0"),  # 100% patient responsibility
+                    oop_max=Decimal("999999"),
+                    deductible_met=Decimal("0"),
+                    oop_accumulated=Decimal("0")
+                )
+
+                client = Client(
+                    name=f"Client {mrn}",
+                    mrn=mrn,
+                    insurance_plan=insurance_plan
+                )
+
+                calculator = RateCalculator(client, rate_schedule)
+                billing_items = calculator.calculate_all_services_combined(billable_services)
+                all_billing_items.extend(billing_items)
+                continue
+
             # Extract rate schedule from PPS comment
-            rate_schedule = parser.extract_rate_schedule(client_services)
+            rate_schedule = parser.extract_rate_schedule(billable_services)
 
             # Extract insurance parameters from PPS comment
             ded_total, ded_met, oop_max, oop_used, coinsurance_rate = parser.extract_insurance_params_from_pps(pps_comment)
+
+            # If OOP is found but no deductible info, deductible is already met
+            if oop_max is not None and ded_total is None:
+                ded_total = Decimal("0")
+                ded_met = Decimal("0")  # Already fully met (no remaining)
 
             # Use defaults if not found in PPS comment
             if ded_total is None:
@@ -68,7 +156,7 @@ def process_batch(services, parser):
             if ded_met is None:
                 ded_met = Decimal("0")
             if oop_max is None:
-                oop_max = Decimal("999999")  # Effectively unlimited
+                oop_max = Decimal("10000")  # Reasonable default
             if oop_used is None:
                 oop_used = Decimal("0")
             if coinsurance_rate is None:
@@ -93,12 +181,15 @@ def process_batch(services, parser):
 
             # Calculate billing for this client
             calculator = RateCalculator(client, rate_schedule)
-            billing_items = calculator.calculate_all_services_combined(client_services)
+            billing_items = calculator.calculate_all_services_combined(billable_services)
 
             all_billing_items.extend(billing_items)
 
         except Exception as e:
             errors.append(f"MRN {mrn}: {str(e)}")
+
+    if skipped_services > 0:
+        errors.insert(0, f"Skipped {skipped_services} non-billable services (RC, CC, Drug Screen)")
 
     return all_billing_items, len(grouped), errors
 
@@ -180,6 +271,16 @@ def main():
                         # Parse the input file
                         parser = SpreadsheetParser()
                         services = parser.parse_file(input_path)
+
+                        # Debug: Show detected columns
+                        st.info(f"Detected columns: {parser.columns}")
+
+                        # Debug: Show first few PPS comments found
+                        pps_samples = [s.pps_comment[:100] for s in services[:3] if s.pps_comment]
+                        if pps_samples:
+                            st.info(f"Sample PPS Comments found: {pps_samples}")
+                        else:
+                            st.warning("No PPS Comments found in any records")
                     finally:
                         if os.path.exists(input_path):
                             os.unlink(input_path)
