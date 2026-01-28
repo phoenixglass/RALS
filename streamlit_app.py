@@ -1,11 +1,15 @@
 """
 RALS - Streamlit Web Application
-Insurance rate calculator web interface
+Insurance rate calculator web interface with batch processing support.
+
+This app processes spreadsheets with multiple clients, extracting insurance
+parameters from PPS Comments automatically.
 """
 
 import streamlit as st
 import tempfile
 import os
+from datetime import date
 from decimal import Decimal
 import re
 
@@ -16,240 +20,255 @@ from rals.models import Client, InsurancePlan
 
 
 def sanitize_filename(name):
-    """Sanitize a string to be safe for use in a filename.
-    
-    Args:
-        name: String to sanitize
-        
-    Returns:
-        Safe filename string
-    """
-    # Replace spaces with underscores
+    """Sanitize a string to be safe for use in a filename."""
     safe_name = name.replace(' ', '_')
-    # Remove any characters that aren't alphanumeric, underscore, hyphen, or period
     safe_name = re.sub(r'[^\w\-.]', '', safe_name)
-    # Limit length to reasonable size
     safe_name = safe_name[:100]
     return safe_name if safe_name else "output"
 
 
+def process_batch(services, parser):
+    """
+    Process multiple clients from a single spreadsheet.
+
+    Groups services by MRN, extracts insurance params from PPS Comments,
+    and calculates billing for each client.
+
+    Returns:
+        Tuple of (all_billing_items, client_count, errors)
+    """
+    # Group services by MRN (client)
+    grouped = parser.group_by_mrn(services)
+
+    all_billing_items = []
+    errors = []
+
+    for mrn, client_services in grouped.items():
+        try:
+            # Get the first service record with a PPS comment for this client
+            pps_comment = None
+            for svc in client_services:
+                if svc.pps_comment:
+                    pps_comment = svc.pps_comment
+                    break
+
+            if not pps_comment:
+                errors.append(f"MRN {mrn}: No PPS Comment found, skipping")
+                continue
+
+            # Extract rate schedule from PPS comment
+            rate_schedule = parser.extract_rate_schedule(client_services)
+
+            # Extract insurance parameters from PPS comment
+            ded_total, ded_met, oop_max, oop_used, coinsurance_rate = parser.extract_insurance_params_from_pps(pps_comment)
+
+            # Use defaults if not found in PPS comment
+            if ded_total is None:
+                ded_total = Decimal("0")
+            if ded_met is None:
+                ded_met = Decimal("0")
+            if oop_max is None:
+                oop_max = Decimal("999999")  # Effectively unlimited
+            if oop_used is None:
+                oop_used = Decimal("0")
+            if coinsurance_rate is None:
+                coinsurance_rate = Decimal("0.40")  # Default 40%
+
+            # Create insurance plan with extracted parameters
+            insurance_plan = InsurancePlan(
+                name="Insurance",
+                deductible=ded_total,
+                coinsurance_rate=coinsurance_rate,
+                oop_max=oop_max,
+                deductible_met=ded_met,
+                oop_accumulated=oop_used
+            )
+
+            # Create client
+            client = Client(
+                name=f"Client {mrn}",
+                mrn=mrn,
+                insurance_plan=insurance_plan
+            )
+
+            # Calculate billing for this client
+            calculator = RateCalculator(client, rate_schedule)
+            billing_items = calculator.calculate_all_services_combined(client_services)
+
+            all_billing_items.extend(billing_items)
+
+        except Exception as e:
+            errors.append(f"MRN {mrn}: {str(e)}")
+
+    return all_billing_items, len(grouped), errors
+
+
 def main():
     """Main Streamlit application"""
-    
+
     # Page configuration
     st.set_page_config(
         page_title="RALS - Rate and Ledger System",
         page_icon="📊",
         layout="wide"
     )
-    
+
     # Header
     st.title("📊 RALS - Rate and Ledger System")
-    st.markdown("Insurance rate calculator for service appointment billing")
-    
+    st.markdown("**Batch processing** for multiple clients - insurance parameters are extracted from PPS Comments automatically")
+
     st.divider()
-    
+
     # File upload section
     st.header("1️⃣ Upload Service Data")
+    st.markdown("""
+    Upload an Excel file containing service records. The file should have:
+    - **MRN** column - Medical Record Number for each client
+    - **Date** column - Service date
+    - **Service** column - Service type (IOP, IT, FT, Group, etc.)
+    - **PPS Comment** column - Contains insurance info like:
+      - Rates: `IOP $200 | Group $75 | IT $225`
+      - Deductible: `$1,732.50/$3,500 deductible`
+      - OOP: `$2,911/$3,350 OOP used as of 1/23`
+      - Coinsurance: `50% coinsurance`
+    """)
+
     uploaded_file = st.file_uploader(
         "Choose an Excel file (.xlsx or .xls)",
         type=["xlsx", "xls"],
-        help="Upload your service appointment data spreadsheet"
+        help="Upload your service appointment data spreadsheet with PPS Comments containing insurance info"
     )
-    
+
     st.divider()
-    
-    # Client information section
-    st.header("2️⃣ Client Information")
-    client_name = st.text_input(
-        "Client Name (Optional)",
-        placeholder="Enter client name",
-        help="This will appear in the billing summary"
-    )
-    
-    st.divider()
-    
-    # Insurance parameters section
-    st.header("3️⃣ Insurance Parameters")
-    
-    col1, col2, col3 = st.columns(3)
-    
+
+    # Options section
+    st.header("2️⃣ Output Options")
+
+    col1, col2 = st.columns(2)
+
     with col1:
-        deductible = st.number_input(
-            "Annual Deductible ($)",
-            min_value=0.0,
-            value=3272.0,
-            step=100.0,
-            format="%.2f",
-            help="Annual deductible amount"
-        )
-    
-    with col2:
-        coinsurance = st.number_input(
-            "Coinsurance Rate",
-            min_value=0.0,
-            max_value=1.0,
-            value=0.40,
-            step=0.05,
-            format="%.2f",
-            help="Coinsurance rate (e.g., 0.40 = 40%)"
-        )
-    
-    with col3:
-        oop_max = st.number_input(
-            "Out-of-Pocket Maximum ($)",
-            min_value=0.0,
-            value=6500.0,
-            step=100.0,
-            format="%.2f",
-            help="Annual out-of-pocket maximum"
-        )
-    
-    # Advanced options (collapsible)
-    with st.expander("⚙️ Advanced Options"):
-        st.markdown("### Prior Accumulations")
-        adv_col1, adv_col2 = st.columns(2)
-        
-        with adv_col1:
-            deductible_met = st.number_input(
-                "Deductible Already Met ($)",
-                min_value=0.0,
-                value=0.0,
-                step=100.0,
-                format="%.2f",
-                help="Amount of deductible already accumulated"
-            )
-        
-        with adv_col2:
-            oop_accumulated = st.number_input(
-                "OOP Already Accumulated ($)",
-                min_value=0.0,
-                value=0.0,
-                step=100.0,
-                format="%.2f",
-                help="Amount of OOP already accumulated"
-            )
-        
         include_details = st.checkbox(
-            "Include calculation details in output",
+            "Include calculation details",
             value=False,
             help="Add columns showing deductible and coinsurance breakdown"
         )
-    
+
+    with col2:
+        include_client_names = st.checkbox(
+            "Include client names in output",
+            value=True,
+            help="Uncheck for HIPAA-compliant output (MRN only)"
+        )
+
     st.divider()
-    
+
     # Calculate button
-    st.header("4️⃣ Process Billing")
-    
-    if st.button("🔢 Calculate Billing", type="primary", use_container_width=True):
+    st.header("3️⃣ Process Billing")
+
+    if st.button("🔢 Calculate Billing for All Clients", type="primary", use_container_width=True):
         if uploaded_file is None:
-            st.error("⚠️ Please upload an Excel file first")
+            st.error("Please upload an Excel file first")
         else:
             try:
-                # Process the file
                 with st.spinner("Processing service data..."):
                     # Save uploaded file to temporary location
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp_file:
                         tmp_file.write(uploaded_file.getvalue())
                         input_path = tmp_file.name
-                    
+
                     try:
                         # Parse the input file
                         parser = SpreadsheetParser()
                         services = parser.parse_file(input_path)
                     finally:
-                        # Clean up the temporary input file
                         if os.path.exists(input_path):
                             os.unlink(input_path)
-                    
+
                     if not services:
-                        st.error("⚠️ No valid service records found in the uploaded file")
+                        st.error("No valid service records found in the uploaded file")
                         return
-                    
-                    # Extract rate schedule from the first service record
-                    rate_schedule = parser.extract_rate_schedule(services)
-                    
-                    # Create insurance plan
-                    insurance_plan = InsurancePlan(
-                        name="Client Insurance Plan",
-                        deductible=Decimal(str(deductible)),
-                        coinsurance_rate=Decimal(str(coinsurance)),
-                        oop_max=Decimal(str(oop_max)),
-                        deductible_met=Decimal(str(deductible_met)),
-                        oop_accumulated=Decimal(str(oop_accumulated))
-                    )
-                    
-                    # Create client
-                    # Get MRN from first service record
-                    mrn = services[0].mrn if hasattr(services[0], 'mrn') and services[0].mrn else "UNKNOWN"
-                    client = Client(
-                        name=client_name if client_name else "Client",
-                        mrn=mrn,
-                        insurance_plan=insurance_plan
-                    )
-                    
-                    # Calculate billing
-                    calculator = RateCalculator(client, rate_schedule)
-                    billing_items = calculator.calculate_all_services_combined(services)
-                    
+
+                    # Process all clients in batch
+                    billing_items, client_count, errors = process_batch(services, parser)
+
                     if not billing_items:
-                        st.error("⚠️ No billable items generated from the service records")
+                        st.error("No billable items generated. Check that PPS Comments contain valid insurance information.")
+                        if errors:
+                            st.warning("Errors encountered:")
+                            for err in errors:
+                                st.text(f"  - {err}")
                         return
-                    
+
                     # Generate output file
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as output_tmp:
                         output_path = output_tmp.name
-                    
+
                     try:
-                        generator = BillingOutputGenerator()
+                        generator = BillingOutputGenerator(include_client_names=include_client_names)
                         result_path = generator.generate(
                             billing_items,
                             output_path,
-                            include_details=include_details
+                            include_details=include_details,
+                            payment_date=date.today()
                         )
-                        
-                        # Read the generated file
+
                         with open(result_path, "rb") as f:
                             output_data = f.read()
                     finally:
-                        # Clean up the temporary output file
                         if os.path.exists(output_path):
                             os.unlink(output_path)
-                
+
                 # Display success message
-                st.success("✅ Billing calculation completed successfully!")
-                
+                st.success("Billing calculation completed successfully!")
+
+                # Show errors if any
+                if errors:
+                    with st.expander(f"⚠️ {len(errors)} Warning(s)", expanded=False):
+                        for err in errors:
+                            st.text(f"  - {err}")
+
                 # Display summary statistics
                 st.header("📈 Summary Statistics")
-                
-                col1, col2, col3 = st.columns(3)
-                
+
+                col1, col2, col3, col4 = st.columns(4)
+
                 with col1:
-                    st.metric("Services Processed", len(services))
-                
+                    st.metric("Clients Processed", client_count)
+
                 with col2:
-                    st.metric("Billable Items", len(billing_items))
-                
+                    st.metric("Services Processed", len(services))
+
                 with col3:
+                    st.metric("Billable Items", len(billing_items))
+
+                with col4:
                     total_charges = sum(item.charge_amount for item in billing_items)
-                    st.metric("Total Patient Responsibility", f"${total_charges:,.2f}")
-                
-                # Show additional details
-                with st.expander("📋 Billing Details"):
-                    st.markdown("### Billing Breakdown")
-                    for i, item in enumerate(billing_items[:10], 1):  # Show first 10 items
-                        st.text(f"{i}. {item.service_date} - {item.service_type}: ${item.charge_amount:.2f}")
-                    
-                    if len(billing_items) > 10:
-                        st.text(f"... and {len(billing_items) - 10} more items")
-                
+                    st.metric("Total Charges", f"${total_charges:,.2f}")
+
+                # Show billing details by client
+                with st.expander("📋 Billing Details by Client"):
+                    # Group by MRN for display
+                    from collections import defaultdict
+                    by_mrn = defaultdict(list)
+                    for item in billing_items:
+                        by_mrn[item.mrn].append(item)
+
+                    for mrn, items in sorted(by_mrn.items()):
+                        client_total = sum(item.charge_amount for item in items)
+                        st.markdown(f"**MRN {mrn}** - {len(items)} items - Total: ${client_total:,.2f}")
+                        for item in items[:5]:
+                            st.text(f"  {item.date_of_service} - {item.service_type}: ${item.charge_amount:.2f}")
+                        if len(items) > 5:
+                            st.text(f"  ... and {len(items) - 5} more items")
+                        st.markdown("---")
+
                 st.divider()
-                
+
                 # Download button
-                st.header("5️⃣ Download Results")
-                
-                output_filename = f"billing_summary_{sanitize_filename(client_name) if client_name else 'output'}.xlsx"
-                
+                st.header("4️⃣ Download Results")
+
+                output_filename = f"billing_summary_{date.today().strftime('%Y%m%d')}.xlsx"
+
                 st.download_button(
                     label="⬇️ Download Billing Summary",
                     data=output_data,
@@ -257,20 +276,19 @@ def main():
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     use_container_width=True
                 )
-                
-                st.success("Click the button above to download your billing summary")
-                
+
+                st.info("The output includes:\n- Billing rows with Payment Date, Charge Amount, and Comment\n- Updated PPS Comments section with new deductible/OOP values")
+
             except Exception as e:
-                st.error(f"❌ Error processing file: {str(e)}")
+                st.error(f"Error processing file: {str(e)}")
                 st.exception(e)
-    
+
     # Footer
     st.divider()
     st.markdown("""
-    ---
-    **RALS - Rate and Ledger System** | 
-    [GitHub Repository](https://github.com/phoenixglass/RALS) | 
-    Version 1.0.0
+    **RALS - Rate and Ledger System** |
+    [GitHub Repository](https://github.com/phoenixglass/RALS) |
+    Version 2.0.0 - Batch Processing
     """)
 
 
