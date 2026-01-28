@@ -180,6 +180,16 @@ def main():
                         # Parse the input file
                         parser = SpreadsheetParser()
                         services = parser.parse_file(input_path)
+
+                        # Debug: Show detected columns
+                        st.info(f"Detected columns: {parser.columns}")
+
+                        # Debug: Show first few PPS comments found
+                        pps_samples = [s.pps_comment[:100] for s in services[:3] if s.pps_comment]
+                        if pps_samples:
+                            st.info(f"Sample PPS Comments found: {pps_samples}")
+                        else:
+                            st.warning("No PPS Comments found in any records")
                     finally:
                         if os.path.exists(input_path):
                             os.unlink(input_path)
