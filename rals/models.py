@@ -35,8 +35,10 @@ SERVICE_ABBREVIATIONS = {
     "Outpatient Group (75-90 minutes)": "Group",
     "Family Session with Client 26+ minutes": "FT",
     "Medication Admin/Injection": "MAT",
-    "OP: Psych Appointment (30-39 minutes)": "Psych f/u 30-39",
-    "OP: Psych Appointment (20-29 minutes)": "Psych f/u 20-29",
+    "OP: Psych Appointment (30-39 minutes)": "Psych f/u",
+    "OP: Psych Appointment (20-29 minutes)": "Psych f/u",
+    "Telemed OP: Psych Appointment (30-39 minutes)": "Psych f/u",
+    "Telemed OP: Psych Appointment (20-29 minutes)": "Psych f/u",
 }
 
 
@@ -100,13 +102,8 @@ def get_service_abbreviation(service_type: str) -> str:
     elif "psych eval" in service_lower or ("psychiatric" in service_lower and "eval" in service_lower):
         abbrev = "Psych Eval"
     elif "psych" in service_lower and ("appointment" in service_lower or "f/u" in service_lower or "follow" in service_lower):
-        # Psych follow-up appointments
-        if "30-39" in service_lower:
-            abbrev = "Psych f/u 30-39"
-        elif "20-29" in service_lower:
-            abbrev = "Psych f/u 20-29"
-        else:
-            abbrev = "Psych f/u"
+        # Psych follow-up appointments - use simple "Psych f/u" abbreviation
+        abbrev = "Psych f/u"
     elif "outpatient 53+" in service_lower or "53+" in service_lower:
         abbrev = "IT 53+"
     elif "outpatient 16-37" in service_lower or "16-37" in service_lower:
@@ -250,7 +247,7 @@ class RateSchedule:
         # Psych services
         if "psych eval" in service_lower:
             return self.psych_eval_rate
-        if "psych f" in service_lower or "psych follow" in service_lower:
+        if "psych f" in service_lower or "psych follow" in service_lower or "psych appointment" in service_lower:
             return self.psych_followup_rate
 
         # Family Therapy
