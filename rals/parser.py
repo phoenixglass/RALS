@@ -86,6 +86,9 @@ class SpreadsheetParser:
         wb = load_workbook(filepath, data_only=True)
         ws = wb.active
 
+        # Auto-detect column positions from header row
+        self._detect_columns_from_header(ws)
+
         records = []
         end = self.end_row or ws.max_row
 
@@ -96,6 +99,64 @@ class SpreadsheetParser:
 
         wb.close()
         return records
+
+    def _detect_columns_from_header(self, ws: Worksheet):
+        """
+        Auto-detect column positions by reading the header row.
+        Updates self.columns with detected positions.
+        """
+        # Header name mappings (lowercase variants -> field name)
+        header_mappings = {
+            'mrn': 'mrn',
+            'date': 'date',
+            'dos': 'date',
+            'service': 'service',
+            'service type': 'service',
+            'pps comment': 'pps_comment',
+            'pps comments': 'pps_comment',
+            'ppscomment': 'pps_comment',
+            'f i pps comment': 'pps_comment',
+            'location': 'location',
+            'provider': 'provider',
+            'supervisor': 'supervisor',
+            'status': 'status',
+            'note status': 'note_status',
+            'physical proc': 'physical_proc',
+            'physical program': 'physical_proc',
+            'n physical program': 'physical_proc',
+            'financial div': 'financial_div',
+            'financial division': 'financial_div',
+            'funding': 'funding',
+            'comments': 'comments',
+            'comment': 'comments',
+            'groupfld1': 'group_id',
+            'group': 'group_id',
+            'from': 'from_time',
+            'to': 'to_time',
+            'duration': 'duration',
+        }
+
+        # Read header row (row 1)
+        detected = {}
+        for col_idx in range(1, ws.max_column + 1):
+            cell_value = ws.cell(row=1, column=col_idx).value
+            if cell_value:
+                header_lower = str(cell_value).strip().lower()
+                # Check for exact match first
+                if header_lower in header_mappings:
+                    field_name = header_mappings[header_lower]
+                    detected[field_name] = col_idx - 1  # Convert to 0-indexed
+                else:
+                    # Check for partial matches (header contains key)
+                    for key, field_name in header_mappings.items():
+                        if key in header_lower or header_lower in key:
+                            if field_name not in detected:
+                                detected[field_name] = col_idx - 1
+                            break
+
+        # Update columns with detected positions (keep defaults for undetected)
+        for field_name, col_idx in detected.items():
+            self.columns[field_name] = col_idx
     
     def _parse_csv_file(self, filepath: Path) -> list[ServiceRecord]:
         """Parse a CSV file and return service records."""
