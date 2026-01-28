@@ -224,8 +224,16 @@ class RateSchedule:
         - FT, Family Therapy → ft_rate
         - Psych Eval → psych_eval_rate
         - Psych f/u, Psych Follow-up → psych_followup_rate
+
+        Half-rate rule for self-pay (shorter appointments):
+        - IT/Outpatient 16-37 minutes → half of it_rate
+        - Psych Appointment 20-29 minutes → half of psych_followup_rate
         """
         service_lower = service_type.lower()
+
+        # Check for shorter appointment durations (half rate)
+        is_short_it = "16-37" in service_lower
+        is_short_psych = "20-29" in service_lower and "psych" in service_lower
 
         # IOP services (check first to catch "IOP" in various forms)
         if "iop" in service_lower:
@@ -242,12 +250,18 @@ class RateSchedule:
         # Outpatient services - ALL map to IT rate (including EMDR variants)
         # This includes: Outpatient 53+, Outpatient EMDR 53+, Outpatient 16-37 minutes
         if "outpatient" in service_lower:
+            if is_short_it:
+                # Half rate for 16-37 minute appointments
+                return (self.it_rate / 2).quantize(Decimal("0.01"))
             return self.it_rate
 
         # Psych services
         if "psych eval" in service_lower:
             return self.psych_eval_rate
         if "psych f" in service_lower or "psych follow" in service_lower or "psych appointment" in service_lower:
+            if is_short_psych:
+                # Half rate for 20-29 minute appointments
+                return (self.psych_followup_rate / 2).quantize(Decimal("0.01"))
             return self.psych_followup_rate
 
         # Family Therapy
@@ -256,13 +270,20 @@ class RateSchedule:
 
         # Individual Therapy
         if "individual" in service_lower or service_lower.startswith("it "):
+            if is_short_it:
+                return (self.it_rate / 2).quantize(Decimal("0.01"))
             return self.it_rate
 
         # Telemed services with psych
         if "telemed" in service_lower and "psych" in service_lower:
-            return self.psych_followup_rate if self.psych_followup_rate > 0 else self.it_rate
+            rate = self.psych_followup_rate if self.psych_followup_rate > 0 else self.it_rate
+            if is_short_psych:
+                return (rate / 2).quantize(Decimal("0.01"))
+            return rate
 
-        # Default to IT rate
+        # Default to IT rate (with half-rate check)
+        if is_short_it:
+            return (self.it_rate / 2).quantize(Decimal("0.01"))
         return self.it_rate
 
 
