@@ -7,8 +7,11 @@ from typing import Tuple, Optional
 
 from .models import (
     InsurancePlan, BillingLineItem, ServiceRecord, RateSchedule, Client,
-    is_self_pay_virtual, SELF_PAY_VIRTUAL_RATES, is_bundled_with_iop
+    is_self_pay_virtual, SELF_PAY_VIRTUAL_RATES, SELF_PAY_RATES, is_bundled_with_iop,
+    is_non_billable, is_paid_in_full, is_self_pay, get_fixed_session_rate,
+    get_copay_amount, get_special_cases
 )
+from . import config
 
 
 class RateCalculator:
@@ -34,11 +37,17 @@ class RateCalculator:
         Calculate patient responsibility for a service.
 
         The calculation follows these rules:
-        1. If deductible not met: patient pays full rate up to remaining deductible
-        2. Once deductible met: patient pays coinsurance (e.g., 20% of rate)
-        3. If OOP max reached: patient pays $0
-        4. If telehealth service with no virtual benefits (SP rates for virtual):
-           patient pays self-pay rate, does NOT count toward deductible/OOP
+        1. Non-billable services: $0 (RC Client Call, Drug Screen, etc.)
+        2. Paid in Full (PIF): $0
+        3. Fixed session rate: Use that rate instead of calculated
+        4. Bundled with IOP: $0 for IT/FT services
+        5. Self-pay virtual: Use self-pay rates, doesn't count toward deductible/OOP
+        6. Self-pay: Use self-pay rates
+        7. Copay: Use copay amount instead of coinsurance
+        8. Normal insurance:
+           - If deductible not met: patient pays full rate up to remaining deductible
+           - Once deductible met: patient pays coinsurance (e.g., 20% of rate)
+           - If OOP max reached: patient pays $0
 
         Args:
             service: The service record to calculate billing for
@@ -46,40 +55,112 @@ class RateCalculator:
         Returns:
             BillingLineItem with calculated amounts
         """
+        # Detect all special cases from PPS Comment
+        special_cases = get_special_cases(service.pps_comment)
+
+        # Check if this is a non-billable service
+        is_service_non_billable = is_non_billable(service.service_type, service.pps_comment)
+
+        # Check if Paid in Full
+        is_pif = special_cases.get("paid_in_full", False)
+
+        # Check for fixed session rate
+        fixed_rate = get_fixed_session_rate(service.pps_comment)
+
         # Check if this is a self-pay virtual service (no virtual benefits)
         is_sp_virtual = (
             service.is_telehealth and
             is_self_pay_virtual(service.pps_comment)
         )
 
+        # Check if this is a general self-pay client
+        is_sp = special_cases.get("self_pay", False)
+
         # Check if this service is bundled with IOP (no separate charge)
         is_bundled = service.is_bundled
+
+        # Check for copay
+        copay_amount = get_copay_amount(service.pps_comment)
+
+        # Check for "deductible then covered 100%"
+        deductible_then_covered = special_cases.get("deductible_then_covered", False)
+
+        # Check for "IOP covered 100%"
+        iop_covered_100 = special_cases.get("iop_covered_100", False) and "iop" in service.service_type.lower()
 
         # Track if deductible becomes met with this charge
         deductible_now_met = False
 
-        if is_bundled:
-            # Bundled IT/FT services with IOP - no charge
+        # Initialize variables
+        full_rate = Decimal("0.00")
+        charge_amount = Decimal("0.00")
+        applied_to_ded = Decimal("0.00")
+        coinsurance_amt = Decimal("0.00")
+        is_self_pay_flag = False
+
+        # Priority 1: Non-billable services
+        if is_service_non_billable:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount = Decimal("0.00")
-            applied_to_ded = Decimal("0.00")
-            coinsurance_amt = Decimal("0.00")
-            # Do NOT update plan accumulators for bundled services
+
+        # Priority 2: Paid in Full
+        elif is_pif:
+            full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
+            charge_amount = Decimal("0.00")
+
+        # Priority 3: IOP covered 100%
+        elif iop_covered_100:
+            full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
+            charge_amount = Decimal("0.00")
+
+        # Priority 4: Fixed session rate
+        elif fixed_rate is not None:
+            full_rate = fixed_rate
+            charge_amount = fixed_rate
+            is_self_pay_flag = True
+            # Fixed rates don't count toward deductible/OOP
+
+        # Priority 5: Bundled with IOP
+        elif is_bundled:
+            full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
+            charge_amount = Decimal("0.00")
+
+        # Priority 6: Self-pay virtual
         elif is_sp_virtual:
-            # Use self-pay rates for virtual services - does NOT count toward deductible/OOP
             full_rate = SELF_PAY_VIRTUAL_RATES.get_rate_for_service(service.service_type)
             charge_amount = full_rate
-            applied_to_ded = Decimal("0.00")
-            coinsurance_amt = Decimal("0.00")
-            # Do NOT update plan accumulators for self-pay
+            is_self_pay_flag = True
+
+        # Priority 7: General self-pay
+        elif is_sp:
+            full_rate = SELF_PAY_RATES.get_rate_for_service(service.service_type)
+            charge_amount = full_rate
+            is_self_pay_flag = True
+
+        # Priority 8: Copay plan
+        elif copay_amount is not None:
+            full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
+            # Cap copay at remaining OOP
+            charge_amount = min(copay_amount, self.plan.remaining_oop)
+            coinsurance_amt = charge_amount
+            # Copay counts toward OOP but NOT deductible
+            self.plan.oop_accumulated += charge_amount
+
+        # Priority 9: Normal insurance calculation
         else:
-            # Normal insurance calculation
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
 
             # Check if deductible was NOT met before this charge
             deductible_was_not_met = not self.plan.deductible_satisfied
 
-            charge_amount, applied_to_ded, coinsurance_amt = self._calculate_breakdown(full_rate)
+            # Check for special coinsurance rules
+            effective_coinsurance = self.plan.coinsurance_rate
+            if deductible_then_covered and self.plan.deductible_satisfied:
+                effective_coinsurance = Decimal("0.00")  # 0% after deductible
+
+            charge_amount, applied_to_ded, coinsurance_amt = self._calculate_breakdown(
+                full_rate, effective_coinsurance
+            )
 
             # Update plan accumulators (only for insurance, not self-pay or bundled)
             self.plan.deductible_met += applied_to_ded
@@ -112,7 +193,7 @@ class RateCalculator:
             is_telehealth=service.is_telehealth,
             duration_code=service.duration_code,
             short_service_type=service.short_service_type,
-            is_self_pay=is_sp_virtual,
+            is_self_pay=is_self_pay_flag or is_sp_virtual or is_sp,
             is_bundled=is_bundled
         )
 
@@ -123,7 +204,7 @@ class RateCalculator:
         # Only for insurance charges, NOT for self-pay or bundled (these don't affect OOP/deductible)
         # Note: The "as of" date is set to today (when the billing report is generated),
         # not the service date, as per user requirements.
-        if service.pps_comment and final_charge > 0 and not is_sp_virtual and not is_bundled:
+        if service.pps_comment and final_charge > 0 and not is_self_pay_flag and not is_bundled:
             billing_item.updated_pps_comment = generate_updated_pps_comment(
                 service.pps_comment,
                 final_charge,
@@ -136,13 +217,16 @@ class RateCalculator:
 
     def _calculate_breakdown(
         self,
-        full_rate: Decimal
+        full_rate: Decimal,
+        effective_coinsurance: Optional[Decimal] = None
     ) -> Tuple[Decimal, Decimal, Decimal]:
         """
         Calculate the breakdown of patient responsibility.
 
         Args:
             full_rate: The full rate for the service
+            effective_coinsurance: Optional override for coinsurance rate
+                                   (used for "deductible then covered 100%" cases)
 
         Returns:
             Tuple of (total_patient_owes, applied_to_deductible, coinsurance_amount)
@@ -161,6 +245,9 @@ class RateCalculator:
             # Return copay as "coinsurance_amount" for tracking (applied_to_deductible is always 0)
             return copay_amount, Decimal("0.00"), copay_amount
 
+        # Use effective coinsurance rate (allows override for special cases)
+        coinsurance_rate = effective_coinsurance if effective_coinsurance is not None else self.plan.coinsurance_rate
+
         # Standard deductible + coinsurance calculation
         remaining_ded = self.plan.remaining_deductible
 
@@ -178,11 +265,11 @@ class RateCalculator:
                 # Part goes to deductible, rest subject to coinsurance
                 applied_to_deductible = remaining_ded
                 remaining_after_ded = full_rate - remaining_ded
-                coinsurance_amount = remaining_after_ded * self.plan.coinsurance_rate
+                coinsurance_amount = remaining_after_ded * coinsurance_rate
                 total_patient_owes = applied_to_deductible + coinsurance_amount
         else:
             # Deductible already satisfied, just coinsurance
-            coinsurance_amount = full_rate * self.plan.coinsurance_rate
+            coinsurance_amount = full_rate * coinsurance_rate
             total_patient_owes = coinsurance_amount
 
         # Cap at remaining OOP
@@ -392,6 +479,9 @@ def parse_rates_from_pps_comment(pps_comment: str) -> RateSchedule:
     Expected format examples:
     - "W: Group Room IOP $575 | Group $125 | IT $260 | FT $200 | Psych Eval $350 | Psych flu $275 | MAT $1: Provider"
     - "IOP $575 | Group $125 | IT $260"
+    - "In Network: IOP $298 | Group $40 | Psych Eval $176.3"
+
+    Uses centralized config patterns for rate type recognition.
 
     Args:
         pps_comment: The PPS Comment string containing rate info
@@ -399,28 +489,13 @@ def parse_rates_from_pps_comment(pps_comment: str) -> RateSchedule:
     Returns:
         RateSchedule with parsed rates
     """
-    import re
-
     schedule = RateSchedule()
 
     if not pps_comment:
         return schedule
 
-    # Known rate type patterns (case-insensitive)
-    # Maps pattern -> (attribute_name, is_exact_match)
-    rate_type_patterns = [
-        (r'\bAssessment\b', 'assessment_rate'),
-        (r'\bIOP\b', 'iop_rate'),
-        (r'\bGroup\b', 'group_rate'),
-        (r'\bIT\b', 'it_rate'),
-        (r'\bFT\b', 'ft_rate'),
-        (r'\bPsych\s*Eval\b', 'psych_eval_rate'),
-        (r'\bPsych\s*flu\b', 'psych_followup_rate'),
-        (r'\bPsych\s*f/u\b', 'psych_followup_rate'),
-        (r'\bPsych\s*Follow\s*-?\s*up\b', 'psych_followup_rate'),
-        (r'\bTelemed\b', 'telemed_rate'),
-        (r'\bEMDR\b', 'emdr_rate'),
-    ]
+    # Use patterns from config
+    rate_type_patterns = config.PPSPatterns.RATE_TYPES
 
     # Split by pipe delimiter to get individual rate entries
     segments = pps_comment.split('|')
@@ -431,8 +506,7 @@ def parse_rates_from_pps_comment(pps_comment: str) -> RateSchedule:
             continue
 
         # Look for a dollar amount in this segment
-        # Pattern: $XXX or $X,XXX or $XXX.XX or $XXX.X
-        amount_match = re.search(r'\$\s*([\d,]+(?:\.\d{1,2})?)', segment)
+        amount_match = re.search(config.PPSPatterns.RATE_AMOUNT, segment)
         if not amount_match:
             continue
 
