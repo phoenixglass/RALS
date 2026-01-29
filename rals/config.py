@@ -581,23 +581,80 @@ SELF_PAY_VIRTUAL_RATES: Dict[str, Decimal] = SELF_PAY_RATES.copy()
 # SCHOLARSHIP CONFIGURATION
 # =============================================================================
 # Scholarships reduce or eliminate client payment for services.
-# Tracking is done in PPS Comment similar to deductible/OOP tracking.
+# Tracking is done in PPS Comment using STANDARDIZED FORMATS.
+#
+# STANDARDIZED SCHOLARSHIP FORMATS:
+# =================================
+# All scholarship info should start with "SCHOLARSHIP:" prefix for clarity.
+#
+# 1. Full Scholarship:
+#    SCHOLARSHIP: Full
+#
+# 2. Partial Scholarship (session-based):
+#    SCHOLARSHIP: Partial | 8/17 IOP paid as of 1/27
+#    (Client pays for 17 IOP sessions, sessions 18-24 are free)
+#
+# 3. Dollar Cap:
+#    SCHOLARSHIP: Cap $1,500/$3,000 collected as of 1/27
+#    (Client pays until $3,000 collected, then scholarship kicks in)
+#
+# 4. Program Total:
+#    SCHOLARSHIP: Program $7,160 | Includes: 1 Intake + 24 IOP + 3 IT + 2 Psych
+#    (Fixed total for entire program - any overage is scholarshipped)
+#
+# 5. Balance Due:
+#    SCHOLARSHIP: Balance $885 due | 3 IOP remaining
+#
+# 6. After Threshold:
+#    SCHOLARSHIP: After $2,775 | $2,500/$2,775 collected as of 1/27
+#    (Scholarship kicks in after threshold collected)
+#
+# 7. Payment Plan (can combine with any above):
+#    Payment Plan $150/week
+#    Payment Plan $500/month
+#
+# 8. Self-Pay Rates (always include for scholarship clients):
+#    RATES: Assessment $450 | IOP $295 | Group $175 | IT $175 | FT $275 | Psych Eval $675 | Psych f/u $200 | MAT $200
+#
+# FULL EXAMPLE (IOP Program):
+#    SCHOLARSHIP: Partial | 8/17 IOP paid as of 1/27 | Includes: 1 Intake + 24 IOP + 3 IT + 2 Psych | Payment Plan $150/week | RATES: IOP $295 | IT $175 | Telemed: Self-Pay
 
 # Program session limits
+# Note: Psych appointments vary by client type:
+#   - New clients: 1 Psych Eval + 1 Psych f/u = 2 total
+#   - Transfer clients: 2 Psych f/u = 2 total
 PROGRAM_LIMITS: Dict[str, int] = {
-    "IOP": 24,           # IOP program is 24 sessions
-    "Group": 10,         # OP Group program is 10 sessions
-    "IT_IOP": 8,         # IT sessions included in IOP program
+    "IOP": 24,           # IOP program is 24 IOP Group sessions
+    "Group": 10,         # OP program is 10 Group sessions
+    "IT_IOP": 3,         # IT sessions included in IOP program
     "IT_OP": 10,         # IT sessions in OP program
-    "Psych Eval": 1,     # 1 Psych Eval in IOP program
-    "Psych f/u": 3,      # 2-3 Psych f/u in IOP program (3 if eval was in detox/resi)
+    "Psych": 2,          # 2 Psych appointments in both programs
+}
+
+# Program definitions for validation
+# Psych appointments (2 total) are:
+#   - New clients: 1 Psych Eval + 1 Psych f/u
+#   - Transfer clients: 2 Psych f/u
+PROGRAM_DEFINITIONS: Dict[str, Dict[str, int]] = {
+    "IOP": {
+        "Intake": 1,
+        "IOP": 24,           # 24 IOP Group Sessions
+        "IT": 3,             # 3 IT Sessions
+        "Psych": 2,          # 2 Psych Appointments (see note above)
+    },
+    "OP": {
+        "Intake": 1,
+        "Group": 10,         # 10 OP Group Sessions
+        "IT": 10,            # 10 IT Sessions
+        "Psych": 2,          # 2 Psych Appointments (see note above)
+    },
 }
 
 
 @dataclass
 class ScholarshipInfo:
     """Parsed scholarship information from PPS Comment."""
-    scholarship_type: str  # "full", "partial", "dollar_cap", "blended", "none"
+    scholarship_type: str  # "full", "partial", "dollar_cap", "program", "balance", "after_threshold", "blended", "none"
 
     # For partial scholarships (X/Y service paid)
     sessions_paid: int = 0           # X - sessions already paid
@@ -605,12 +662,25 @@ class ScholarshipInfo:
     service_type: str = ""           # Which service (IOP, IT, Group, etc.)
     as_of_date: str = ""             # Date of last update
 
-    # For dollar cap scholarships
+    # For dollar cap and program scholarships
     amount_used: Decimal = Decimal("0.00")   # Amount client has paid
-    cap_amount: Decimal = Decimal("0.00")    # Total cap before scholarship kicks in
+    cap_amount: Decimal = Decimal("0.00")    # Total cap/program amount
+
+    # For after-threshold scholarships
+    threshold_amount: Decimal = Decimal("0.00")  # Amount after which scholarship kicks in
+
+    # For balance due
+    balance_due: Decimal = Decimal("0.00")
 
     # For blended rate
     blended_rate: Optional[Decimal] = None   # Fixed rate per session
+
+    # Program includes (what services are covered)
+    program_includes: Dict[str, int] = field(default_factory=dict)
+
+    # Payment plan
+    payment_plan_amount: Optional[Decimal] = None
+    payment_plan_frequency: str = ""  # "week" or "month"
 
     @property
     def is_scholarshipped(self) -> bool:
@@ -629,41 +699,165 @@ class ScholarshipInfo:
         """For partial scholarships, check if we're past paid sessions."""
         if self.scholarship_type == "partial":
             return self.sessions_paid >= self.total_paid_sessions
-        if self.scholarship_type == "dollar_cap":
+        if self.scholarship_type in ("dollar_cap", "program"):
             return self.amount_used >= self.cap_amount
+        if self.scholarship_type == "after_threshold":
+            return self.amount_used >= self.threshold_amount
+        if self.scholarship_type == "balance":
+            return self.balance_due <= Decimal("0.00")
         if self.scholarship_type == "full":
             return True
         return False
 
+    @property
+    def amount_remaining(self) -> Decimal:
+        """Amount remaining before scholarship phase (for cap/program/threshold)."""
+        if self.scholarship_type in ("dollar_cap", "program"):
+            return max(Decimal("0.00"), self.cap_amount - self.amount_used)
+        if self.scholarship_type == "after_threshold":
+            return max(Decimal("0.00"), self.threshold_amount - self.amount_used)
+        if self.scholarship_type == "balance":
+            return max(Decimal("0.00"), self.balance_due)
+        return Decimal("0.00")
+
 
 class ScholarshipPatterns:
-    """Regex patterns for parsing scholarship info from PPS Comment."""
+    """Regex patterns for parsing scholarship info from PPS Comment.
 
-    # Full scholarship: "Full scholarship" or "scholarship" alone
-    FULL_SCHOLARSHIP = r'\bfull\s+scholarship\b'
+    STANDARDIZED FORMATS (preferred):
+    - SCHOLARSHIP: Full
+    - SCHOLARSHIP: Partial | X/Y SERVICE paid as of M/D
+    - SCHOLARSHIP: Cap $X/$Y collected as of M/D
+    - SCHOLARSHIP: Program $X | Includes: ...
+    - SCHOLARSHIP: Balance $X due
+    - SCHOLARSHIP: After $X | $Y/$X collected as of M/D
+    - Payment Plan $X/week or $X/month
+    """
 
-    # Partial scholarship: "8/17 IOP paid as of 1/27"
-    # Captures: (sessions_paid, total_paid, service_type, date)
-    PARTIAL_SCHOLARSHIP = r'(\d+)/(\d+)\s+(IOP|IT|Group|FT|Psych(?:\s*(?:Eval|f/u))?)\s+paid\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+    # ==========================================================================
+    # STANDARDIZED FORMATS (with SCHOLARSHIP: prefix)
+    # ==========================================================================
 
-    # Dollar cap: "$1,500/$3,000 scholarship cap used as of 1/27"
-    # Captures: (amount_used, cap_amount, date)
-    DOLLAR_CAP = r'\$\s*([\d,]+(?:\.\d{2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{2})?)\s+scholarship\s+cap\s+used\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+    # SCHOLARSHIP: Full
+    FULL_STANDARD = r'SCHOLARSHIP:\s*Full\b'
 
-    # Blended rate: "$150 per session" (already handled by fixed_session_rate,
-    # but we detect it here for scholarship context)
+    # SCHOLARSHIP: Partial | 8/17 IOP paid as of 1/27
+    PARTIAL_STANDARD = r'SCHOLARSHIP:\s*Partial\s*\|\s*(\d+)/(\d+)\s+(IOP|IT|Group|FT|Psych(?:\s*(?:Eval|f/u))?)\s+paid\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+
+    # SCHOLARSHIP: Cap $1,500/$3,000 collected as of 1/27
+    CAP_STANDARD = r'SCHOLARSHIP:\s*Cap\s+\$\s*([\d,]+(?:\.\d{2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{2})?)\s+collected\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+
+    # SCHOLARSHIP: Program $7,160 | Includes: 1 Intake + 24 IOP + 3 IT + 2 Psych
+    PROGRAM_STANDARD = r'SCHOLARSHIP:\s*Program\s+\$\s*([\d,]+(?:\.\d{2})?)'
+
+    # SCHOLARSHIP: Balance $885 due
+    BALANCE_STANDARD = r'SCHOLARSHIP:\s*Balance\s+\$\s*([\d,]+(?:\.\d{2})?)\s+due'
+
+    # SCHOLARSHIP: After $2,775 | $2,500/$2,775 collected as of 1/27
+    AFTER_THRESHOLD_STANDARD = r'SCHOLARSHIP:\s*After\s+\$\s*([\d,]+(?:\.\d{2})?)\s*\|\s*\$\s*([\d,]+(?:\.\d{2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{2})?)\s+collected\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+
+    # Includes: 1 Intake + 24 IOP + 3 IT + 2 Psych (can appear with any type)
+    INCLUDES = r'Includes:\s*([^|]+)'
+
+    # Payment Plan $150/week or Payment Plan $500/month
+    PAYMENT_PLAN = r'Payment\s+Plan\s+\$\s*([\d,]+(?:\.\d{2})?)\s*/\s*(week|month)'
+
+    # ==========================================================================
+    # LEGACY FORMATS (for backwards compatibility)
+    # ==========================================================================
+
+    # Full scholarship: "Full scholarship"
+    FULL_LEGACY = r'\bFull\s+[Ss]cholarship\b'
+
+    # Partial scholarship: "8/17 IOP paid as of 1/27" (without SCHOLARSHIP: prefix)
+    PARTIAL_LEGACY = r'(\d+)/(\d+)\s+(IOP|IT|Group|FT|Psych(?:\s*(?:Eval|f/u))?)\s+paid\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+
+    # Dollar cap legacy: "$1,500/$3,000 scholarship cap used as of 1/27"
+    CAP_LEGACY = r'\$\s*([\d,]+(?:\.\d{2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{2})?)\s+scholarship\s+cap\s+(?:used|collected)\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+
+    # Blended rate: "$150 per session"
     BLENDED_RATE = r'\$\s*(\d+(?:\.\d{2})?)\s+per\s+session'
+
+    # Legacy payment plan: "payment plan of $150 per week"
+    PAYMENT_PLAN_LEGACY = r'payment\s+plan\s+(?:of\s+)?\$\s*([\d,]+(?:\.\d{2})?)\s+per\s+(week|month)'
+
+
+def parse_includes(pps_comment: str) -> Dict[str, int]:
+    """Parse the 'Includes:' section of a scholarship PPS Comment.
+
+    Example: "Includes: 1 Intake + 24 IOP + 3 IT + 2 Psych"
+    Returns: {"Intake": 1, "IOP": 24, "IT": 3, "Psych": 2}
+    """
+    result = {}
+
+    match = re.search(ScholarshipPatterns.INCLUDES, pps_comment, re.IGNORECASE)
+    if not match:
+        return result
+
+    includes_str = match.group(1)
+
+    # Parse "N ServiceType" patterns
+    # Note: Order matters - more specific patterns (Psych Eval, Psych f/u) must come before generic "Psych"
+    service_patterns = [
+        (r'(\d+)\s*Intake', 'Intake'),
+        (r'(\d+)\s*IOP', 'IOP'),
+        (r'(\d+)\s*IT', 'IT'),
+        (r'(\d+)\s*(?:OP\s+)?Group', 'Group'),  # "Group" or "OP Group"
+        (r'(\d+)\s*FT', 'FT'),
+        (r'(\d+)\s*Psych\s*Eval', 'Psych Eval'),
+        (r'(\d+)\s*Psych\s*f/u', 'Psych f/u'),
+        (r'(\d+)\s*Psych(?!\s*(?:Eval|f/u))', 'Psych'),  # Generic "Psych" (not Eval or f/u)
+        (r'(\d+)\s*MAT', 'MAT'),
+    ]
+
+    for pattern, service in service_patterns:
+        match = re.search(pattern, includes_str, re.IGNORECASE)
+        if match:
+            result[service] = int(match.group(1))
+
+    return result
+
+
+def parse_payment_plan(pps_comment: str) -> Tuple[Optional[Decimal], str]:
+    """Parse payment plan info from PPS Comment.
+
+    Returns: (amount, frequency) or (None, "")
+    """
+    if not pps_comment:
+        return None, ""
+
+    # Try standard format first
+    match = re.search(ScholarshipPatterns.PAYMENT_PLAN, pps_comment, re.IGNORECASE)
+    if match:
+        return Decimal(match.group(1).replace(",", "")), match.group(2).lower()
+
+    # Try legacy format
+    match = re.search(ScholarshipPatterns.PAYMENT_PLAN_LEGACY, pps_comment, re.IGNORECASE)
+    if match:
+        return Decimal(match.group(1).replace(",", "")), match.group(2).lower()
+
+    return None, ""
 
 
 def parse_scholarship_info(pps_comment: str) -> ScholarshipInfo:
     """
     Parse scholarship information from PPS Comment.
 
-    Formats supported:
-    - Full scholarship: "Full scholarship"
-    - Partial scholarship: "8/17 IOP paid as of 1/27"
-    - Dollar cap: "$1,500/$3,000 scholarship cap used as of 1/27"
-    - Blended rate: "$150 per session"
+    Supports both STANDARDIZED and LEGACY formats.
+
+    STANDARDIZED FORMATS (preferred):
+    - SCHOLARSHIP: Full
+    - SCHOLARSHIP: Partial | 8/17 IOP paid as of 1/27
+    - SCHOLARSHIP: Cap $1,500/$3,000 collected as of 1/27
+    - SCHOLARSHIP: Program $7,160 | Includes: 1 Intake + 24 IOP + 3 IT + 2 Psych
+    - SCHOLARSHIP: Balance $885 due
+    - SCHOLARSHIP: After $2,775 | $2,500/$2,775 collected as of 1/27
+
+    LEGACY FORMATS (still supported):
+    - Full scholarship
+    - 8/17 IOP paid as of 1/27
+    - $1,500/$3,000 scholarship cap used as of 1/27
+    - $150 per session
 
     Args:
         pps_comment: The PPS Comment string
@@ -674,39 +868,137 @@ def parse_scholarship_info(pps_comment: str) -> ScholarshipInfo:
     if not pps_comment:
         return ScholarshipInfo(scholarship_type="none")
 
-    pps_lower = pps_comment.lower()
+    # Parse payment plan (can accompany any scholarship type)
+    payment_amount, payment_freq = parse_payment_plan(pps_comment)
 
-    # Check for full scholarship
-    if re.search(ScholarshipPatterns.FULL_SCHOLARSHIP, pps_lower):
-        return ScholarshipInfo(scholarship_type="full")
+    # Parse includes (can accompany any scholarship type)
+    includes = parse_includes(pps_comment)
 
-    # Check for partial scholarship (X/Y service paid as of date)
-    partial_match = re.search(ScholarshipPatterns.PARTIAL_SCHOLARSHIP, pps_comment, re.IGNORECASE)
-    if partial_match:
+    # ==========================================================================
+    # TRY STANDARDIZED FORMATS FIRST
+    # ==========================================================================
+
+    # SCHOLARSHIP: Full
+    if re.search(ScholarshipPatterns.FULL_STANDARD, pps_comment, re.IGNORECASE):
+        return ScholarshipInfo(
+            scholarship_type="full",
+            payment_plan_amount=payment_amount,
+            payment_plan_frequency=payment_freq,
+            program_includes=includes
+        )
+
+    # SCHOLARSHIP: Partial | X/Y SERVICE paid as of M/D
+    match = re.search(ScholarshipPatterns.PARTIAL_STANDARD, pps_comment, re.IGNORECASE)
+    if match:
         return ScholarshipInfo(
             scholarship_type="partial",
-            sessions_paid=int(partial_match.group(1)),
-            total_paid_sessions=int(partial_match.group(2)),
-            service_type=partial_match.group(3),
-            as_of_date=partial_match.group(4)
+            sessions_paid=int(match.group(1)),
+            total_paid_sessions=int(match.group(2)),
+            service_type=match.group(3),
+            as_of_date=match.group(4),
+            payment_plan_amount=payment_amount,
+            payment_plan_frequency=payment_freq,
+            program_includes=includes
         )
 
-    # Check for dollar cap scholarship
-    cap_match = re.search(ScholarshipPatterns.DOLLAR_CAP, pps_comment, re.IGNORECASE)
-    if cap_match:
+    # SCHOLARSHIP: Cap $X/$Y collected as of M/D
+    match = re.search(ScholarshipPatterns.CAP_STANDARD, pps_comment, re.IGNORECASE)
+    if match:
         return ScholarshipInfo(
             scholarship_type="dollar_cap",
-            amount_used=Decimal(cap_match.group(1).replace(",", "")),
-            cap_amount=Decimal(cap_match.group(2).replace(",", "")),
-            as_of_date=cap_match.group(3)
+            amount_used=Decimal(match.group(1).replace(",", "")),
+            cap_amount=Decimal(match.group(2).replace(",", "")),
+            as_of_date=match.group(3),
+            payment_plan_amount=payment_amount,
+            payment_plan_frequency=payment_freq,
+            program_includes=includes
         )
 
-    # Check for blended rate (treat as a type of scholarship arrangement)
-    blended_match = re.search(ScholarshipPatterns.BLENDED_RATE, pps_comment, re.IGNORECASE)
-    if blended_match:
+    # SCHOLARSHIP: Program $X | Includes: ...
+    match = re.search(ScholarshipPatterns.PROGRAM_STANDARD, pps_comment, re.IGNORECASE)
+    if match:
+        return ScholarshipInfo(
+            scholarship_type="program",
+            cap_amount=Decimal(match.group(1).replace(",", "")),
+            payment_plan_amount=payment_amount,
+            payment_plan_frequency=payment_freq,
+            program_includes=includes
+        )
+
+    # SCHOLARSHIP: Balance $X due
+    match = re.search(ScholarshipPatterns.BALANCE_STANDARD, pps_comment, re.IGNORECASE)
+    if match:
+        return ScholarshipInfo(
+            scholarship_type="balance",
+            balance_due=Decimal(match.group(1).replace(",", "")),
+            payment_plan_amount=payment_amount,
+            payment_plan_frequency=payment_freq,
+            program_includes=includes
+        )
+
+    # SCHOLARSHIP: After $X | $Y/$X collected as of M/D
+    match = re.search(ScholarshipPatterns.AFTER_THRESHOLD_STANDARD, pps_comment, re.IGNORECASE)
+    if match:
+        return ScholarshipInfo(
+            scholarship_type="after_threshold",
+            threshold_amount=Decimal(match.group(1).replace(",", "")),
+            amount_used=Decimal(match.group(2).replace(",", "")),
+            cap_amount=Decimal(match.group(3).replace(",", "")),
+            as_of_date=match.group(4),
+            payment_plan_amount=payment_amount,
+            payment_plan_frequency=payment_freq,
+            program_includes=includes
+        )
+
+    # ==========================================================================
+    # TRY LEGACY FORMATS
+    # ==========================================================================
+
+    # Full scholarship (legacy)
+    if re.search(ScholarshipPatterns.FULL_LEGACY, pps_comment, re.IGNORECASE):
+        return ScholarshipInfo(
+            scholarship_type="full",
+            payment_plan_amount=payment_amount,
+            payment_plan_frequency=payment_freq,
+            program_includes=includes
+        )
+
+    # Partial scholarship (legacy): X/Y SERVICE paid as of M/D
+    match = re.search(ScholarshipPatterns.PARTIAL_LEGACY, pps_comment, re.IGNORECASE)
+    if match:
+        return ScholarshipInfo(
+            scholarship_type="partial",
+            sessions_paid=int(match.group(1)),
+            total_paid_sessions=int(match.group(2)),
+            service_type=match.group(3),
+            as_of_date=match.group(4),
+            payment_plan_amount=payment_amount,
+            payment_plan_frequency=payment_freq,
+            program_includes=includes
+        )
+
+    # Dollar cap (legacy)
+    match = re.search(ScholarshipPatterns.CAP_LEGACY, pps_comment, re.IGNORECASE)
+    if match:
+        return ScholarshipInfo(
+            scholarship_type="dollar_cap",
+            amount_used=Decimal(match.group(1).replace(",", "")),
+            cap_amount=Decimal(match.group(2).replace(",", "")),
+            as_of_date=match.group(3),
+            payment_plan_amount=payment_amount,
+            payment_plan_frequency=payment_freq,
+            program_includes=includes
+        )
+
+    # Blended rate: $X per session
+    match = re.search(ScholarshipPatterns.BLENDED_RATE, pps_comment, re.IGNORECASE)
+    if match:
         return ScholarshipInfo(
             scholarship_type="blended",
-            blended_rate=Decimal(blended_match.group(1))
+            blended_rate=Decimal(match.group(1)),
+            payment_plan_amount=payment_amount,
+            payment_plan_frequency=payment_freq,
+            program_includes=includes
         )
 
     return ScholarshipInfo(scholarship_type="none")
@@ -778,58 +1070,104 @@ def get_scholarship_charge(
             # Still under cap - charge normally
             return default_rate, False
 
+    if scholarship.scholarship_type == "program":
+        # Program total - check if total paid equals program amount
+        if scholarship.amount_used >= scholarship.cap_amount:
+            return Decimal("0.00"), True
+        else:
+            return default_rate, False
+
+    if scholarship.scholarship_type == "balance":
+        # Balance due - if balance is 0 or less, scholarship phase
+        if scholarship.balance_due <= Decimal("0.00"):
+            return Decimal("0.00"), True
+        else:
+            return default_rate, False
+
+    if scholarship.scholarship_type == "after_threshold":
+        # Scholarship kicks in after threshold reached
+        if scholarship.amount_used >= scholarship.threshold_amount:
+            return Decimal("0.00"), True
+        else:
+            return default_rate, False
+
     return default_rate, False
+
+
+def _format_currency(amount: Decimal) -> str:
+    """Format a decimal as currency string."""
+    if amount == amount.to_integral_value():
+        return f"${int(amount):,}"
+    else:
+        return f"${amount:,.2f}"
 
 
 def format_updated_scholarship(
     scholarship: ScholarshipInfo,
     increment_sessions: bool = False,
     add_amount: Decimal = Decimal("0.00"),
+    subtract_balance: Decimal = Decimal("0.00"),
     new_date: Optional[str] = None
 ) -> str:
     """
     Generate updated scholarship tracking string for PPS Comment.
 
+    Uses STANDARDIZED format with SCHOLARSHIP: prefix.
+
     Args:
         scholarship: Current scholarship info
         increment_sessions: Whether to increment session count (for partial)
-        add_amount: Amount to add to used amount (for dollar cap)
+        add_amount: Amount to add to used amount (for dollar cap/program/threshold)
+        subtract_balance: Amount to subtract from balance due
         new_date: New as-of date (defaults to keeping existing)
 
     Returns:
-        Updated scholarship string for PPS Comment
+        Updated scholarship string for PPS Comment (standardized format)
     """
     if scholarship.scholarship_type == "none":
         return ""
 
-    if scholarship.scholarship_type == "full":
-        return "Full scholarship"
-
-    if scholarship.scholarship_type == "blended":
-        return f"${scholarship.blended_rate} per session"
-
     date_str = new_date or scholarship.as_of_date
+    parts = []
 
-    if scholarship.scholarship_type == "partial":
+    if scholarship.scholarship_type == "full":
+        parts.append("SCHOLARSHIP: Full")
+
+    elif scholarship.scholarship_type == "blended":
+        parts.append(f"${scholarship.blended_rate} per session")
+
+    elif scholarship.scholarship_type == "partial":
         new_sessions = scholarship.sessions_paid + (1 if increment_sessions else 0)
-        return f"{new_sessions}/{scholarship.total_paid_sessions} {scholarship.service_type} paid as of {date_str}"
+        parts.append(f"SCHOLARSHIP: Partial | {new_sessions}/{scholarship.total_paid_sessions} {scholarship.service_type} paid as of {date_str}")
 
-    if scholarship.scholarship_type == "dollar_cap":
+    elif scholarship.scholarship_type == "dollar_cap":
         new_amount = scholarship.amount_used + add_amount
-        # Format amounts
-        if new_amount == new_amount.to_integral_value():
-            amount_str = f"${int(new_amount):,}"
-        else:
-            amount_str = f"${new_amount:,.2f}"
+        parts.append(f"SCHOLARSHIP: Cap {_format_currency(new_amount)}/{_format_currency(scholarship.cap_amount)} collected as of {date_str}")
 
-        if scholarship.cap_amount == scholarship.cap_amount.to_integral_value():
-            cap_str = f"${int(scholarship.cap_amount):,}"
-        else:
-            cap_str = f"${scholarship.cap_amount:,.2f}"
+    elif scholarship.scholarship_type == "program":
+        new_amount = scholarship.amount_used + add_amount
+        parts.append(f"SCHOLARSHIP: Program {_format_currency(scholarship.cap_amount)} | {_format_currency(new_amount)}/{_format_currency(scholarship.cap_amount)} collected as of {date_str}")
 
-        return f"{amount_str}/{cap_str} scholarship cap used as of {date_str}"
+    elif scholarship.scholarship_type == "balance":
+        new_balance = max(Decimal("0.00"), scholarship.balance_due - subtract_balance)
+        parts.append(f"SCHOLARSHIP: Balance {_format_currency(new_balance)} due")
 
-    return ""
+    elif scholarship.scholarship_type == "after_threshold":
+        new_amount = scholarship.amount_used + add_amount
+        parts.append(f"SCHOLARSHIP: After {_format_currency(scholarship.threshold_amount)} | {_format_currency(new_amount)}/{_format_currency(scholarship.threshold_amount)} collected as of {date_str}")
+
+    # Add Includes if present
+    if scholarship.program_includes:
+        includes_parts = []
+        for service, count in scholarship.program_includes.items():
+            includes_parts.append(f"{count} {service}")
+        parts.append(f"Includes: {' + '.join(includes_parts)}")
+
+    # Add payment plan if present
+    if scholarship.payment_plan_amount:
+        parts.append(f"Payment Plan {_format_currency(scholarship.payment_plan_amount)}/{scholarship.payment_plan_frequency}")
+
+    return " | ".join(parts)
 
 
 # =============================================================================
@@ -1037,9 +1375,11 @@ def extract_telemed_benefit(pps_comment: str) -> Optional[bool]:
     return None
 
 
-def parse_payment_plan(pps_comment: str) -> Optional[Dict[str, Any]]:
+def parse_pps_payment_plan(pps_comment: str) -> Optional[Dict[str, Any]]:
     """
-    Extract payment plan details from PPS Comment.
+    Extract payment plan details from PPS Comment using PPSPatterns format.
+
+    This is for the insurance/PPS format: "Payment plan $500/month for 12 months"
 
     Args:
         pps_comment: The PPS Comment string
