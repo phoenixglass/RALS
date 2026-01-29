@@ -430,22 +430,9 @@ class PPSPatterns:
 # =============================================================================
 # SELF-PAY RATE SCHEDULES
 # =============================================================================
-# Default rates for self-pay clients
+# Default rates for self-pay clients (same for virtual and in-person)
 
 SELF_PAY_RATES: Dict[str, Decimal] = {
-    "assessment_rate": Decimal("450.00"),
-    "iop_rate": Decimal("575.00"),
-    "group_rate": Decimal("125.00"),
-    "it_rate": Decimal("260.00"),
-    "ft_rate": Decimal("200.00"),
-    "psych_eval_rate": Decimal("350.00"),
-    "psych_followup_rate": Decimal("275.00"),
-    "mat_rate": Decimal("150.00"),
-    "emdr_rate": Decimal("260.00"),
-    "telemed_rate": Decimal("260.00"),
-}
-
-SELF_PAY_VIRTUAL_RATES: Dict[str, Decimal] = {
     "assessment_rate": Decimal("450.00"),
     "iop_rate": Decimal("295.00"),
     "group_rate": Decimal("175.00"),
@@ -457,6 +444,9 @@ SELF_PAY_VIRTUAL_RATES: Dict[str, Decimal] = {
     "emdr_rate": Decimal("175.00"),
     "telemed_rate": Decimal("175.00"),
 }
+
+# Virtual and in-person self-pay rates are identical
+SELF_PAY_VIRTUAL_RATES: Dict[str, Decimal] = SELF_PAY_RATES.copy()
 
 
 # =============================================================================
