@@ -12,6 +12,10 @@ from .models import (
     get_copay_amount, get_special_cases
 )
 from . import config
+from .config import (
+    is_nsf_service, get_nsf_rate,
+    parse_scholarship_info, get_scholarship_charge, format_updated_scholarship
+)
 
 
 class RateCalculator:
@@ -38,13 +42,24 @@ class RateCalculator:
 
         The calculation follows these rules:
         1. Non-billable services: $0 (RC Client Call, Drug Screen, etc.)
-        2. Paid in Full (PIF): $0
-        3. Fixed session rate: Use that rate instead of calculated
-        4. Bundled with IOP: $0 for IT/FT services
-        5. Self-pay virtual: Use self-pay rates, doesn't count toward deductible/OOP
-        6. Self-pay: Use self-pay rates
-        7. Copay: Use copay amount instead of coinsurance
-        8. Normal insurance:
+        2. No Show Fee (NSF): Charged even for PIF/scholarship clients!
+           - IOP/Group NSF: ALWAYS $25 (no exceptions)
+           - In-Network NSF: Full contracted rate from PPS Comment
+           - Out-of-Network/Self-Pay NSF: Self-pay rates
+        3. Paid in Full (PIF): $0 (but NOT for NSF - see rule 2)
+        4. Scholarship:
+           - Full scholarship: $0 for all services
+           - Partial scholarship (in scholarship phase): $0 for scholarshipped service
+           - Partial scholarship (in paid phase): self-pay rate
+           - Dollar cap (over cap): $0
+           - Dollar cap (under cap): self-pay rate
+           - Blended rate: fixed rate per session
+        5. IOP covered 100%: $0
+        6. Bundled with IOP: $0 for IT/FT services
+        7. Self-pay virtual: Use self-pay rates
+        8. Self-pay: Use self-pay rates
+        9. Copay: Use copay amount instead of coinsurance
+        10. Normal insurance:
            - If deductible not met: patient pays full rate up to remaining deductible
            - Once deductible met: patient pays coinsurance (e.g., 20% of rate)
            - If OOP max reached: patient pays $0
@@ -61,10 +76,17 @@ class RateCalculator:
         # Check if this is a non-billable service
         is_service_non_billable = is_non_billable(service.service_type, service.pps_comment)
 
-        # Check if Paid in Full
+        # Check if this is a No Show Fee (NSF) service
+        # NSF is charged regardless of PIF/scholarship status - must check BEFORE everything else
+        is_nsf = is_nsf_service(service.service_type)
+
+        # Check if Paid in Full (but NSF overrides PIF)
         is_pif = special_cases.get("paid_in_full", False)
 
-        # Check for fixed session rate
+        # Parse scholarship info
+        scholarship = parse_scholarship_info(service.pps_comment)
+
+        # Check for fixed session rate (also covers blended rate scholarships)
         fixed_rate = get_fixed_session_rate(service.pps_comment)
 
         # Check if this is a self-pay virtual service (no virtual benefits)
@@ -91,41 +113,77 @@ class RateCalculator:
         # Track if deductible becomes met with this charge
         deductible_now_met = False
 
+        # Track if scholarship session should be incremented
+        increment_scholarship_session = False
+        scholarship_amount_to_add = Decimal("0.00")
+
         # Initialize variables
         full_rate = Decimal("0.00")
         charge_amount = Decimal("0.00")
         applied_to_ded = Decimal("0.00")
         coinsurance_amt = Decimal("0.00")
         is_self_pay_flag = False
+        is_scholarshipped = False
 
-        # Priority 1: Non-billable services
-        if is_service_non_billable:
+        # Priority 1: Non-billable services (but NOT NSF - NSF is billable)
+        if is_service_non_billable and not is_nsf:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount = Decimal("0.00")
 
-        # Priority 2: Paid in Full
+        # Priority 2: No Show Fee (NSF) - charged even for PIF/scholarship clients
+        # IOP/Group = $25 always; In-Network = contracted rate; Others = self-pay rate
+        elif is_nsf:
+            full_rate = get_nsf_rate(service.service_type, service.pps_comment, self.rate_schedule)
+            charge_amount = full_rate
+            is_self_pay_flag = True
+            # NSF does NOT count toward deductible/OOP or scholarship tracking
+
+        # Priority 3: Paid in Full (but NSF still gets charged above)
         elif is_pif:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount = Decimal("0.00")
 
-        # Priority 3: IOP covered 100%
+        # Priority 4: Scholarship handling
+        elif scholarship.is_scholarshipped:
+            # Get the self-pay rate as the base rate for scholarship clients
+            full_rate = SELF_PAY_RATES.get_rate_for_service(service.service_type)
+
+            # Determine charge based on scholarship type and status
+            charge_amount, is_scholarshipped = get_scholarship_charge(
+                service.service_type,
+                scholarship,
+                full_rate
+            )
+            is_self_pay_flag = True
+
+            # Track for scholarship counter update
+            if scholarship.scholarship_type == "partial":
+                # Only increment if this service matches the scholarship service
+                # and we're in the paid phase
+                if not is_scholarshipped:
+                    increment_scholarship_session = True
+            elif scholarship.scholarship_type == "dollar_cap":
+                # Track amount spent
+                scholarship_amount_to_add = charge_amount
+
+        # Priority 5: IOP covered 100%
         elif iop_covered_100:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount = Decimal("0.00")
 
-        # Priority 4: Fixed session rate
+        # Priority 6: Fixed session rate (blended rate)
         elif fixed_rate is not None:
             full_rate = fixed_rate
             charge_amount = fixed_rate
             is_self_pay_flag = True
             # Fixed rates don't count toward deductible/OOP
 
-        # Priority 5: Bundled with IOP
+        # Priority 7: Bundled with IOP
         elif is_bundled:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount = Decimal("0.00")
 
-        # Priority 6: Self-pay virtual
+        # Priority 8: Self-pay virtual
         elif is_sp_virtual:
             # Check for special self-pay pricing
             if config.is_psych_with_mat(service.service_type):
@@ -137,7 +195,7 @@ class RateCalculator:
             charge_amount = full_rate
             is_self_pay_flag = True
 
-        # Priority 7: General self-pay
+        # Priority 9: General self-pay
         elif is_sp:
             # Check for special self-pay pricing
             if config.is_psych_with_mat(service.service_type):
@@ -149,7 +207,7 @@ class RateCalculator:
             charge_amount = full_rate
             is_self_pay_flag = True
 
-        # Priority 8: Copay plan
+        # Priority 10: Copay plan
         elif copay_amount is not None:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             # Cap copay at remaining OOP
