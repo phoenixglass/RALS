@@ -511,6 +511,7 @@ SELF_PAY_RATES: Dict[str, Decimal] = {
     "assessment_rate": Decimal("450.00"),
     "iop_rate": Decimal("575.00"),
     "group_rate": Decimal("125.00"),
+    "specialty_group_rate": Decimal("100.00"),  # 45-60 min groups
     "it_rate": Decimal("260.00"),
     "ft_rate": Decimal("200.00"),
     "psych_eval_rate": Decimal("350.00"),
@@ -524,6 +525,7 @@ SELF_PAY_VIRTUAL_RATES: Dict[str, Decimal] = {
     "assessment_rate": Decimal("450.00"),
     "iop_rate": Decimal("295.00"),
     "group_rate": Decimal("175.00"),
+    "specialty_group_rate": Decimal("100.00"),  # 45-60 min groups (same as in-person)
     "it_rate": Decimal("175.00"),
     "ft_rate": Decimal("275.00"),
     "psych_eval_rate": Decimal("675.00"),
@@ -532,6 +534,12 @@ SELF_PAY_VIRTUAL_RATES: Dict[str, Decimal] = {
     "emdr_rate": Decimal("175.00"),
     "telemed_rate": Decimal("175.00"),
 }
+
+
+# Specialty group patterns (45-60 min groups - different self-pay rate)
+SPECIALTY_GROUP_PATTERNS: List[str] = [
+    r"45-60",  # Matches "45-60 Minutes" or "45-60 minutes"
+]
 
 
 # =============================================================================
@@ -643,6 +651,63 @@ def should_apply_half_rate(service_type: str) -> bool:
             return True
 
     return False
+
+
+def is_specialty_group(service_type: str) -> bool:
+    """
+    Check if this is a specialty group (45-60 min).
+
+    Specialty groups have different self-pay pricing ($100) but same
+    insurance rate as regular groups.
+
+    Args:
+        service_type: The service type from Column D
+
+    Returns:
+        True if this is a specialty group
+    """
+    if not service_type:
+        return False
+
+    for pattern in SPECIALTY_GROUP_PATTERNS:
+        if re.search(pattern, service_type, re.IGNORECASE):
+            return True
+
+    return False
+
+
+def is_psych_with_mat(service_type: str) -> bool:
+    """
+    Check if this is a combined Psych + MAT service.
+
+    These services have special pricing:
+    - Self-pay: flat $200
+    - Insurance: Psych f/u rate + MAT rate combined
+
+    Args:
+        service_type: The service type from Column D
+
+    Returns:
+        True if this is a combined Psych + MAT service
+    """
+    if not service_type:
+        return False
+
+    psych_mat_patterns = [
+        r"Psych.*Medication\s*Admin",
+        r"Psych.*Medication\s*Induction",
+        r"Psych.*MAT",
+    ]
+
+    for pattern in psych_mat_patterns:
+        if re.search(pattern, service_type, re.IGNORECASE):
+            return True
+
+    return False
+
+
+# Self-pay rate for combined Psych + MAT appointments
+PSYCH_MAT_SELF_PAY_RATE = Decimal("200.00")
 
 
 def extract_fixed_session_rate(pps_comment: str) -> Optional[Decimal]:

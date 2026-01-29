@@ -127,13 +127,25 @@ class RateCalculator:
 
         # Priority 6: Self-pay virtual
         elif is_sp_virtual:
-            full_rate = SELF_PAY_VIRTUAL_RATES.get_rate_for_service(service.service_type)
+            # Check for special self-pay pricing
+            if config.is_psych_with_mat(service.service_type):
+                full_rate = config.PSYCH_MAT_SELF_PAY_RATE
+            elif config.is_specialty_group(service.service_type):
+                full_rate = config.SELF_PAY_VIRTUAL_RATES["specialty_group_rate"]
+            else:
+                full_rate = SELF_PAY_VIRTUAL_RATES.get_rate_for_service(service.service_type)
             charge_amount = full_rate
             is_self_pay_flag = True
 
         # Priority 7: General self-pay
         elif is_sp:
-            full_rate = SELF_PAY_RATES.get_rate_for_service(service.service_type)
+            # Check for special self-pay pricing
+            if config.is_psych_with_mat(service.service_type):
+                full_rate = config.PSYCH_MAT_SELF_PAY_RATE
+            elif config.is_specialty_group(service.service_type):
+                full_rate = config.SELF_PAY_RATES["specialty_group_rate"]
+            else:
+                full_rate = SELF_PAY_RATES.get_rate_for_service(service.service_type)
             charge_amount = full_rate
             is_self_pay_flag = True
 
@@ -148,7 +160,13 @@ class RateCalculator:
 
         # Priority 9: Normal insurance calculation
         else:
-            full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
+            # Check for combined Psych + MAT service (uses both rates)
+            if config.is_psych_with_mat(service.service_type):
+                psych_rate = self.rate_schedule.psych_followup_rate
+                mat_rate = self.rate_schedule.mat_rate
+                full_rate = psych_rate + mat_rate
+            else:
+                full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
 
             # Check if deductible was NOT met before this charge
             deductible_was_not_met = not self.plan.deductible_satisfied
