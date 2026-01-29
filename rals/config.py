@@ -222,19 +222,26 @@ def is_nsf_service(service_type: str) -> bool:
     return service_type.upper().startswith("NSF") or " NSF" in service_type.upper()
 
 
-def get_nsf_rate(service_type: str) -> Decimal:
+def is_in_network(pps_comment: str) -> bool:
+    """Check if this client is in-network based on PPS Comment."""
+    if not pps_comment:
+        return False
+    return "in network:" in pps_comment.lower()
+
+
+def get_nsf_rate(service_type: str, pps_comment: str = "", rate_schedule: Any = None) -> Decimal:
     """
     Get the NSF rate for a service type.
 
-    NSF services are always billed at self-pay rates:
-    - IOP/Group: $25.00
-    - Psych (any): $200.00
-    - Assessment: $200.00
-    - IT full (38+): $175.00
-    - IT short (16-37): $87.50
+    NSF Rules:
+    1. IOP/Group: ALWAYS $25.00 - no exceptions (in-network, out-of-network, self-pay, PIF)
+    2. In-Network: Use full contracted rate from PPS Comment (before deductible rate)
+    3. Out-of-Network/Self-Pay: Use self-pay rates
 
     Args:
         service_type: The service type (with or without NSF prefix)
+        pps_comment: The PPS Comment string (to check in-network status and get contracted rates)
+        rate_schedule: Optional RateSchedule with parsed in-network rates
 
     Returns:
         The NSF rate for this service
@@ -244,15 +251,35 @@ def get_nsf_rate(service_type: str) -> Decimal:
     # Remove NSF prefix for matching
     clean_service = re.sub(r'^nsf\s*', '', service_lower, flags=re.IGNORECASE).strip()
 
-    # IOP and Group: Always $25
+    # =======================================================================
+    # RULE 1: IOP and Group NSF are ALWAYS $25 - no exceptions
+    # =======================================================================
     if "iop" in clean_service:
-        return NSF_RATES["iop_rate"]
+        return NSF_RATES["iop_rate"]  # Always $25
     if "group" in clean_service:
-        return NSF_RATES["group_rate"]
+        return NSF_RATES["group_rate"]  # Always $25
+
+    # =======================================================================
+    # RULE 2: In-Network clients - use full contracted rate from PPS Comment
+    # =======================================================================
+    if is_in_network(pps_comment) and rate_schedule is not None:
+        # Get the rate key for this service
+        rate_key = get_rate_key_for_service(service_type)
+        attr_name = RATE_KEY_TO_ATTRIBUTE.get(rate_key, "it_rate")
+
+        # Get the contracted rate (full rate, not coinsurance rate)
+        contracted_rate = getattr(rate_schedule, attr_name, Decimal("0.00"))
+
+        if contracted_rate > Decimal("0.00"):
+            return contracted_rate
+
+    # =======================================================================
+    # RULE 3: Out-of-Network / Self-Pay - use self-pay NSF rates
+    # =======================================================================
 
     # All psych appointments (including evals): $200
     if "psych" in clean_service:
-        return NSF_RATES["psych_eval_rate"]  # Same rate for eval and f/u
+        return NSF_RATES["psych_eval_rate"]  # $200 for all psych NSF
 
     # Assessment/Intake: $200
     if "assessment" in clean_service or "intake" in clean_service:

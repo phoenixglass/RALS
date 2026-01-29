@@ -39,8 +39,11 @@ class RateCalculator:
 
         The calculation follows these rules:
         1. Non-billable services: $0 (RC Client Call, Drug Screen, etc.)
-        2. No Show Fee (NSF): Always self-pay rates (IOP/Group=$25, others=SP rates)
-        3. Paid in Full (PIF): $0
+        2. No Show Fee (NSF): Charged even for PIF clients!
+           - IOP/Group NSF: ALWAYS $25 (no exceptions)
+           - In-Network NSF: Full contracted rate from PPS Comment
+           - Out-of-Network/Self-Pay NSF: Self-pay rates
+        3. Paid in Full (PIF): $0 (but NOT for NSF - see rule 2)
         4. Fixed session rate: Use that rate instead of calculated
         5. Bundled with IOP: $0 for IT/FT services
         6. Self-pay virtual: Use self-pay rates, doesn't count toward deductible/OOP
@@ -63,10 +66,11 @@ class RateCalculator:
         # Check if this is a non-billable service
         is_service_non_billable = is_non_billable(service.service_type, service.pps_comment)
 
-        # Check if this is a No Show Fee (NSF) service - always self-pay
+        # Check if this is a No Show Fee (NSF) service
+        # NSF is charged regardless of PIF status - must check BEFORE PIF
         is_nsf = is_nsf_service(service.service_type)
 
-        # Check if Paid in Full
+        # Check if Paid in Full (but NSF overrides PIF)
         is_pif = special_cases.get("paid_in_full", False)
 
         # Check for fixed session rate
@@ -103,19 +107,20 @@ class RateCalculator:
         coinsurance_amt = Decimal("0.00")
         is_self_pay_flag = False
 
-        # Priority 1: Non-billable services
-        if is_service_non_billable:
+        # Priority 1: Non-billable services (but NOT NSF - NSF is billable)
+        if is_service_non_billable and not is_nsf:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount = Decimal("0.00")
 
-        # Priority 2: No Show Fee (NSF) - always self-pay, regardless of insurance
+        # Priority 2: No Show Fee (NSF) - charged even for PIF clients
+        # IOP/Group = $25 always; In-Network = contracted rate; Others = self-pay rate
         elif is_nsf:
-            full_rate = get_nsf_rate(service.service_type)
+            full_rate = get_nsf_rate(service.service_type, service.pps_comment, self.rate_schedule)
             charge_amount = full_rate
             is_self_pay_flag = True
             # NSF does NOT count toward deductible/OOP
 
-        # Priority 3: Paid in Full
+        # Priority 3: Paid in Full (but NSF still gets charged above)
         elif is_pif:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount = Decimal("0.00")
