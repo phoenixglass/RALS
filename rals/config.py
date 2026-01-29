@@ -578,6 +578,261 @@ SELF_PAY_VIRTUAL_RATES: Dict[str, Decimal] = SELF_PAY_RATES.copy()
 
 
 # =============================================================================
+# SCHOLARSHIP CONFIGURATION
+# =============================================================================
+# Scholarships reduce or eliminate client payment for services.
+# Tracking is done in PPS Comment similar to deductible/OOP tracking.
+
+# Program session limits
+PROGRAM_LIMITS: Dict[str, int] = {
+    "IOP": 24,           # IOP program is 24 sessions
+    "Group": 10,         # OP Group program is 10 sessions
+    "IT_IOP": 8,         # IT sessions included in IOP program
+    "IT_OP": 10,         # IT sessions in OP program
+    "Psych Eval": 1,     # 1 Psych Eval in IOP program
+    "Psych f/u": 3,      # 2-3 Psych f/u in IOP program (3 if eval was in detox/resi)
+}
+
+
+@dataclass
+class ScholarshipInfo:
+    """Parsed scholarship information from PPS Comment."""
+    scholarship_type: str  # "full", "partial", "dollar_cap", "blended", "none"
+
+    # For partial scholarships (X/Y service paid)
+    sessions_paid: int = 0           # X - sessions already paid
+    total_paid_sessions: int = 0     # Y - total sessions client pays for
+    service_type: str = ""           # Which service (IOP, IT, Group, etc.)
+    as_of_date: str = ""             # Date of last update
+
+    # For dollar cap scholarships
+    amount_used: Decimal = Decimal("0.00")   # Amount client has paid
+    cap_amount: Decimal = Decimal("0.00")    # Total cap before scholarship kicks in
+
+    # For blended rate
+    blended_rate: Optional[Decimal] = None   # Fixed rate per session
+
+    @property
+    def is_scholarshipped(self) -> bool:
+        """Check if any scholarship applies."""
+        return self.scholarship_type != "none"
+
+    @property
+    def sessions_remaining_paid(self) -> int:
+        """For partial scholarships, how many paid sessions remain."""
+        if self.scholarship_type == "partial":
+            return max(0, self.total_paid_sessions - self.sessions_paid)
+        return 0
+
+    @property
+    def is_in_scholarship_phase(self) -> bool:
+        """For partial scholarships, check if we're past paid sessions."""
+        if self.scholarship_type == "partial":
+            return self.sessions_paid >= self.total_paid_sessions
+        if self.scholarship_type == "dollar_cap":
+            return self.amount_used >= self.cap_amount
+        if self.scholarship_type == "full":
+            return True
+        return False
+
+
+class ScholarshipPatterns:
+    """Regex patterns for parsing scholarship info from PPS Comment."""
+
+    # Full scholarship: "Full scholarship" or "scholarship" alone
+    FULL_SCHOLARSHIP = r'\bfull\s+scholarship\b'
+
+    # Partial scholarship: "8/17 IOP paid as of 1/27"
+    # Captures: (sessions_paid, total_paid, service_type, date)
+    PARTIAL_SCHOLARSHIP = r'(\d+)/(\d+)\s+(IOP|IT|Group|FT|Psych(?:\s*(?:Eval|f/u))?)\s+paid\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+
+    # Dollar cap: "$1,500/$3,000 scholarship cap used as of 1/27"
+    # Captures: (amount_used, cap_amount, date)
+    DOLLAR_CAP = r'\$\s*([\d,]+(?:\.\d{2})?)\s*/\s*\$?\s*([\d,]+(?:\.\d{2})?)\s+scholarship\s+cap\s+used\s+as\s+of\s+(\d{1,2}/\d{1,2}(?:/\d{2,4})?)'
+
+    # Blended rate: "$150 per session" (already handled by fixed_session_rate,
+    # but we detect it here for scholarship context)
+    BLENDED_RATE = r'\$\s*(\d+(?:\.\d{2})?)\s+per\s+session'
+
+
+def parse_scholarship_info(pps_comment: str) -> ScholarshipInfo:
+    """
+    Parse scholarship information from PPS Comment.
+
+    Formats supported:
+    - Full scholarship: "Full scholarship"
+    - Partial scholarship: "8/17 IOP paid as of 1/27"
+    - Dollar cap: "$1,500/$3,000 scholarship cap used as of 1/27"
+    - Blended rate: "$150 per session"
+
+    Args:
+        pps_comment: The PPS Comment string
+
+    Returns:
+        ScholarshipInfo with parsed values
+    """
+    if not pps_comment:
+        return ScholarshipInfo(scholarship_type="none")
+
+    pps_lower = pps_comment.lower()
+
+    # Check for full scholarship
+    if re.search(ScholarshipPatterns.FULL_SCHOLARSHIP, pps_lower):
+        return ScholarshipInfo(scholarship_type="full")
+
+    # Check for partial scholarship (X/Y service paid as of date)
+    partial_match = re.search(ScholarshipPatterns.PARTIAL_SCHOLARSHIP, pps_comment, re.IGNORECASE)
+    if partial_match:
+        return ScholarshipInfo(
+            scholarship_type="partial",
+            sessions_paid=int(partial_match.group(1)),
+            total_paid_sessions=int(partial_match.group(2)),
+            service_type=partial_match.group(3),
+            as_of_date=partial_match.group(4)
+        )
+
+    # Check for dollar cap scholarship
+    cap_match = re.search(ScholarshipPatterns.DOLLAR_CAP, pps_comment, re.IGNORECASE)
+    if cap_match:
+        return ScholarshipInfo(
+            scholarship_type="dollar_cap",
+            amount_used=Decimal(cap_match.group(1).replace(",", "")),
+            cap_amount=Decimal(cap_match.group(2).replace(",", "")),
+            as_of_date=cap_match.group(3)
+        )
+
+    # Check for blended rate (treat as a type of scholarship arrangement)
+    blended_match = re.search(ScholarshipPatterns.BLENDED_RATE, pps_comment, re.IGNORECASE)
+    if blended_match:
+        return ScholarshipInfo(
+            scholarship_type="blended",
+            blended_rate=Decimal(blended_match.group(1))
+        )
+
+    return ScholarshipInfo(scholarship_type="none")
+
+
+def get_scholarship_charge(
+    service_type: str,
+    scholarship: ScholarshipInfo,
+    default_rate: Decimal
+) -> Tuple[Decimal, bool]:
+    """
+    Determine the charge amount based on scholarship status.
+
+    Args:
+        service_type: The service type being charged
+        scholarship: Parsed scholarship info
+        default_rate: The rate that would apply without scholarship
+
+    Returns:
+        Tuple of (charge_amount, is_scholarshipped)
+        - charge_amount: What to charge (may be $0 if scholarshipped)
+        - is_scholarshipped: True if this service is covered by scholarship
+    """
+    if scholarship.scholarship_type == "none":
+        return default_rate, False
+
+    if scholarship.scholarship_type == "full":
+        return Decimal("0.00"), True
+
+    if scholarship.scholarship_type == "blended":
+        # Blended rate applies to all services
+        return scholarship.blended_rate or default_rate, False
+
+    if scholarship.scholarship_type == "partial":
+        # Check if this service type matches the scholarship service
+        service_lower = service_type.lower()
+        scholarship_service_lower = scholarship.service_type.lower()
+
+        # Normalize service types for comparison
+        service_matches = False
+        if "iop" in scholarship_service_lower and "iop" in service_lower:
+            service_matches = True
+        elif "it" in scholarship_service_lower and ("outpatient" in service_lower or "it" in service_lower) and "iop" not in service_lower and "group" not in service_lower:
+            service_matches = True
+        elif "group" in scholarship_service_lower and "group" in service_lower:
+            service_matches = True
+        elif "ft" in scholarship_service_lower and ("family" in service_lower or "ft" in service_lower):
+            service_matches = True
+        elif "psych" in scholarship_service_lower and "psych" in service_lower:
+            service_matches = True
+
+        if service_matches:
+            # Check if we're still in the paid phase
+            if scholarship.sessions_paid < scholarship.total_paid_sessions:
+                # Still paying - charge the default rate
+                return default_rate, False
+            else:
+                # In scholarship phase - $0
+                return Decimal("0.00"), True
+        else:
+            # Different service type - not affected by this scholarship
+            return default_rate, False
+
+    if scholarship.scholarship_type == "dollar_cap":
+        # Check if cap has been reached
+        if scholarship.amount_used >= scholarship.cap_amount:
+            return Decimal("0.00"), True
+        else:
+            # Still under cap - charge normally
+            return default_rate, False
+
+    return default_rate, False
+
+
+def format_updated_scholarship(
+    scholarship: ScholarshipInfo,
+    increment_sessions: bool = False,
+    add_amount: Decimal = Decimal("0.00"),
+    new_date: Optional[str] = None
+) -> str:
+    """
+    Generate updated scholarship tracking string for PPS Comment.
+
+    Args:
+        scholarship: Current scholarship info
+        increment_sessions: Whether to increment session count (for partial)
+        add_amount: Amount to add to used amount (for dollar cap)
+        new_date: New as-of date (defaults to keeping existing)
+
+    Returns:
+        Updated scholarship string for PPS Comment
+    """
+    if scholarship.scholarship_type == "none":
+        return ""
+
+    if scholarship.scholarship_type == "full":
+        return "Full scholarship"
+
+    if scholarship.scholarship_type == "blended":
+        return f"${scholarship.blended_rate} per session"
+
+    date_str = new_date or scholarship.as_of_date
+
+    if scholarship.scholarship_type == "partial":
+        new_sessions = scholarship.sessions_paid + (1 if increment_sessions else 0)
+        return f"{new_sessions}/{scholarship.total_paid_sessions} {scholarship.service_type} paid as of {date_str}"
+
+    if scholarship.scholarship_type == "dollar_cap":
+        new_amount = scholarship.amount_used + add_amount
+        # Format amounts
+        if new_amount == new_amount.to_integral_value():
+            amount_str = f"${int(new_amount):,}"
+        else:
+            amount_str = f"${new_amount:,.2f}"
+
+        if scholarship.cap_amount == scholarship.cap_amount.to_integral_value():
+            cap_str = f"${int(scholarship.cap_amount):,}"
+        else:
+            cap_str = f"${scholarship.cap_amount:,.2f}"
+
+        return f"{amount_str}/{cap_str} scholarship cap used as of {date_str}"
+
+    return ""
+
+
+# =============================================================================
 # HELPER FUNCTIONS
 # =============================================================================
 
