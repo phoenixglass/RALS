@@ -8,6 +8,9 @@ from typing import Optional
 from enum import Enum
 import decimal  # For InvalidOperation exception
 
+# Import from centralized config
+from . import config
+
 
 class ServiceCategory(Enum):
     """Categories of services for rate mapping."""
@@ -22,119 +25,23 @@ class ServiceCategory(Enum):
     OTHER = "Other"
 
 
-# Service abbreviation mapping for billing comments
-SERVICE_ABBREVIATIONS = {
-    "Telemed: IOP": "IOP",
-    "IOP-Wilton": "IOP",
-    "Telemed: Outpatient 53+": "IT 53+",
-    "Outpatient 53+": "IT 53+",
-    "Outpatient 16-37 minutes": "IT 16-37",
-    "Outpatient 38-52 minutes": "IT 38-52",
-    "Psychiatric Diag. Eval. W. Med Services": "Psych Eval",
-    "Assessment/Diag (BPS) w/o med services": "Assess",
-    "Outpatient Group (75-90 minutes)": "Group",
-    "Family Session with Client 26+ minutes": "FT",
-    "Medication Admin/Injection": "MAT",
-    "OP: Psych Appointment (30-39 minutes)": "Psych f/u",
-    "OP: Psych Appointment (20-29 minutes)": "Psych f/u",
-    "Telemed OP: Psych Appointment (30-39 minutes)": "Psych f/u",
-    "Telemed OP: Psych Appointment (20-29 minutes)": "Psych f/u",
-}
+# Re-export SERVICE_ABBREVIATIONS for backward compatibility
+SERVICE_ABBREVIATIONS = config.SERVICE_ABBREVIATIONS
 
 
 def get_service_abbreviation(service_type: str) -> str:
     """
     Get abbreviated service name for billing comments.
-    
-    Handles special rules:
-    - Services starting with "Telemed:" get "Tele" prefix
-    - Services starting with "NSF" get "NSF" suffix
-    - Uses mapping table for known service types
-    - Falls back to intelligent parsing for unknown types
-    
+
+    Delegates to config module for centralized mapping.
+
     Args:
         service_type: Full service type name
-        
+
     Returns:
         Abbreviated service name for use in billing comments
     """
-    if not service_type:
-        return "IT"
-    
-    # Check if exact match in abbreviation mapping
-    if service_type in SERVICE_ABBREVIATIONS:
-        abbrev = SERVICE_ABBREVIATIONS[service_type]
-        
-        # Add Tele prefix if original starts with "Telemed:"
-        if service_type.startswith("Telemed:"):
-            return f"Tele {abbrev}"
-        
-        return abbrev
-    
-    # Handle NSF prefix/suffix
-    has_nsf = service_type.startswith("NSF")
-    clean_service = service_type.replace("NSF ", "").strip() if has_nsf else service_type
-    
-    # Handle Telemed prefix
-    is_telemed = clean_service.startswith("Telemed:")
-    if is_telemed:
-        clean_service = clean_service.replace("Telemed:", "").strip()
-    
-    # Check cleaned service in mapping
-    if clean_service in SERVICE_ABBREVIATIONS:
-        abbrev = SERVICE_ABBREVIATIONS[clean_service]
-        
-        # Add Tele prefix if telehealth
-        if is_telemed:
-            abbrev = f"Tele {abbrev}"
-        
-        # Add NSF suffix if NSF
-        if has_nsf:
-            abbrev = f"{abbrev} NSF"
-        
-        return abbrev
-    
-    # Fallback: parse common patterns
-    service_lower = clean_service.lower()
-    
-    if "iop" in service_lower:
-        abbrev = "IOP"
-    elif "psych eval" in service_lower or ("psychiatric" in service_lower and "eval" in service_lower):
-        abbrev = "Psych Eval"
-    elif "psych" in service_lower and ("appointment" in service_lower or "f/u" in service_lower or "follow" in service_lower):
-        # Psych follow-up appointments - use simple "Psych f/u" abbreviation
-        abbrev = "Psych f/u"
-    elif "outpatient 53+" in service_lower or "53+" in service_lower:
-        abbrev = "IT 53+"
-    elif "outpatient 16-37" in service_lower or "16-37" in service_lower:
-        abbrev = "IT 16-37"
-    elif "outpatient 38-52" in service_lower or "38-52" in service_lower:
-        abbrev = "IT 38-52"
-    elif "outpatient" in service_lower or "individual" in service_lower:
-        abbrev = "IT"
-    elif "assessment" in service_lower or "diag" in service_lower:
-        abbrev = "Assess"
-    elif "group" in service_lower:
-        abbrev = "Group"
-    elif "family" in service_lower:
-        abbrev = "FT"
-    elif "medication" in service_lower or "injection" in service_lower:
-        abbrev = "MAT"
-    elif "emdr" in service_lower:
-        abbrev = "EMDR"
-    else:
-        # Default fallback
-        abbrev = "IT"
-    
-    # Add Tele prefix if telehealth
-    if is_telemed:
-        abbrev = f"Tele {abbrev}"
-    
-    # Add NSF suffix if NSF
-    if has_nsf:
-        abbrev = f"{abbrev} NSF"
-    
-    return abbrev
+    return config.get_service_abbreviation(service_type)
 
 
 @dataclass
@@ -215,89 +122,53 @@ class RateSchedule:
     def get_rate_for_service(self, service_type: str) -> Decimal:
         """Get the appropriate rate for a service type.
 
-        Service type to rate mapping:
-        - Assessment, Telemed: Assessment → assessment_rate (fallback: it_rate)
-        - IOP, IOP Huntington, Telemed: IOP → iop_rate
-        - Group → group_rate
-        - Outpatient 53+, Outpatient EMDR 53+, Outpatient 16-37 → it_rate
-        - IT, Individual Therapy → it_rate
-        - FT, Family Therapy → ft_rate
-        - Psych Eval → psych_eval_rate
-        - Psych f/u, Psych Follow-up → psych_followup_rate
-
-        Half-rate rule for self-pay (shorter appointments):
-        - IT/Outpatient 16-37 minutes → half of it_rate
-        - Psych Appointment 20-29 minutes → half of psych_followup_rate
+        Uses centralized config for service-to-rate mapping.
+        Applies half-rate rules for shorter appointments.
         """
-        service_lower = service_type.lower()
+        # Get the rate key from config
+        rate_key = config.get_rate_key_for_service(service_type)
 
-        # Check for shorter appointment durations (half rate)
-        is_short_it = "16-37" in service_lower
-        is_short_psych = "20-29" in service_lower and "psych" in service_lower
+        # Map rate key to attribute
+        attr_name = config.RATE_KEY_TO_ATTRIBUTE.get(rate_key, "it_rate")
+        base_rate = getattr(self, attr_name, self.it_rate)
 
-        # IOP services (check first to catch "IOP" in various forms)
-        if "iop" in service_lower:
-            return self.iop_rate
+        # Handle fallbacks for zero rates
+        if base_rate == Decimal("0.00"):
+            if attr_name == "assessment_rate":
+                base_rate = self.it_rate
+            elif attr_name == "emdr_rate":
+                base_rate = self.it_rate
 
-        # Assessment services
-        if "assessment" in service_lower:
-            return self.assessment_rate if self.assessment_rate > 0 else self.it_rate
+        # Apply half-rate if applicable
+        if config.should_apply_half_rate(service_type):
+            return (base_rate / 2).quantize(Decimal("0.01"))
 
-        # Group services (check before outpatient to handle "Outpatient Group")
-        if "group" in service_lower:
-            return self.group_rate
-
-        # Outpatient services - ALL map to IT rate (including EMDR variants)
-        # This includes: Outpatient 53+, Outpatient EMDR 53+, Outpatient 16-37 minutes
-        if "outpatient" in service_lower:
-            if is_short_it:
-                # Half rate for 16-37 minute appointments
-                return (self.it_rate / 2).quantize(Decimal("0.01"))
-            return self.it_rate
-
-        # Psych services
-        if "psych eval" in service_lower:
-            return self.psych_eval_rate
-        if "psych f" in service_lower or "psych follow" in service_lower or "psych appointment" in service_lower:
-            if is_short_psych:
-                # Half rate for 20-29 minute appointments
-                return (self.psych_followup_rate / 2).quantize(Decimal("0.01"))
-            return self.psych_followup_rate
-
-        # Family Therapy
-        if "family" in service_lower or service_lower.startswith("ft "):
-            return self.ft_rate
-
-        # Individual Therapy
-        if "individual" in service_lower or service_lower.startswith("it "):
-            if is_short_it:
-                return (self.it_rate / 2).quantize(Decimal("0.01"))
-            return self.it_rate
-
-        # Telemed services with psych
-        if "telemed" in service_lower and "psych" in service_lower:
-            rate = self.psych_followup_rate if self.psych_followup_rate > 0 else self.it_rate
-            if is_short_psych:
-                return (rate / 2).quantize(Decimal("0.01"))
-            return rate
-
-        # Default to IT rate (with half-rate check)
-        if is_short_it:
-            return (self.it_rate / 2).quantize(Decimal("0.01"))
-        return self.it_rate
+        return base_rate
 
 
 # Default self-pay rates for virtual services (when client has no virtual benefits)
-# Used when PPS comment indicates "SP rates for virtual", "SP for virtual", etc.
+# Uses rates from centralized config
 SELF_PAY_VIRTUAL_RATES = RateSchedule(
-    assessment_rate=Decimal("450.00"),
-    iop_rate=Decimal("295.00"),
-    group_rate=Decimal("175.00"),
-    it_rate=Decimal("175.00"),
-    ft_rate=Decimal("275.00"),
-    psych_eval_rate=Decimal("675.00"),
-    psych_followup_rate=Decimal("200.00"),
-    mat_rate=Decimal("200.00"),
+    assessment_rate=config.SELF_PAY_VIRTUAL_RATES["assessment_rate"],
+    iop_rate=config.SELF_PAY_VIRTUAL_RATES["iop_rate"],
+    group_rate=config.SELF_PAY_VIRTUAL_RATES["group_rate"],
+    it_rate=config.SELF_PAY_VIRTUAL_RATES["it_rate"],
+    ft_rate=config.SELF_PAY_VIRTUAL_RATES["ft_rate"],
+    psych_eval_rate=config.SELF_PAY_VIRTUAL_RATES["psych_eval_rate"],
+    psych_followup_rate=config.SELF_PAY_VIRTUAL_RATES["psych_followup_rate"],
+    mat_rate=config.SELF_PAY_VIRTUAL_RATES["mat_rate"],
+)
+
+# Default self-pay rates (non-virtual)
+SELF_PAY_RATES = RateSchedule(
+    assessment_rate=config.SELF_PAY_RATES["assessment_rate"],
+    iop_rate=config.SELF_PAY_RATES["iop_rate"],
+    group_rate=config.SELF_PAY_RATES["group_rate"],
+    it_rate=config.SELF_PAY_RATES["it_rate"],
+    ft_rate=config.SELF_PAY_RATES["ft_rate"],
+    psych_eval_rate=config.SELF_PAY_RATES["psych_eval_rate"],
+    psych_followup_rate=config.SELF_PAY_RATES["psych_followup_rate"],
+    mat_rate=config.SELF_PAY_RATES["mat_rate"],
 )
 
 
@@ -305,8 +176,7 @@ def is_self_pay_virtual(pps_comment: str) -> bool:
     """
     Check if the PPS comment indicates self-pay rates for virtual services.
 
-    This occurs when the client has no virtual/telehealth benefits.
-    Patterns: "SP rates for virtual", "SP for virtual", "Self Pay rates for virtual", etc.
+    Delegates to config module for pattern matching.
 
     Args:
         pps_comment: The PPS Comment string
@@ -314,26 +184,8 @@ def is_self_pay_virtual(pps_comment: str) -> bool:
     Returns:
         True if self-pay rates apply for virtual services
     """
-    if not pps_comment:
-        return False
-
-    pps_lower = pps_comment.lower()
-
-    # Check for various patterns indicating self-pay for virtual
-    sp_patterns = [
-        "sp rates for virtual",
-        "sp for virtual",
-        "self pay rates for virtual",
-        "self pay for virtual",
-        "self-pay rates for virtual",
-        "self-pay for virtual",
-        "(sp rates for virtual)",
-        "(sp for virtual)",
-        "(self pay rates for virtual)",
-        "(self pay for virtual)",
-    ]
-
-    return any(pattern in pps_lower for pattern in sp_patterns)
+    special_cases = config.detect_special_cases(pps_comment)
+    return special_cases.get("self_pay_virtual", False)
 
 
 def is_bundled_with_iop(pps_comment: str, physical_proc: str, service_type: str) -> bool:
@@ -378,6 +230,89 @@ def is_bundled_with_iop(pps_comment: str, physical_proc: str, service_type: str)
 
     # Only IT and FT are bundled; Group is NOT bundled (different LOC)
     return (is_it_service or is_ft_service) and not is_group_service
+
+
+def is_non_billable(service_type: str, pps_comment: str = "") -> bool:
+    """
+    Check if a service is non-billable (should be $0).
+
+    Delegates to config module for pattern matching.
+
+    Args:
+        service_type: The service type from Column D
+        pps_comment: The PPS Comment (for additional context)
+
+    Returns:
+        True if the service should be $0
+    """
+    return config.is_non_billable_service(service_type, pps_comment)
+
+
+def is_paid_in_full(pps_comment: str) -> bool:
+    """
+    Check if the client has paid in full for the year.
+
+    Args:
+        pps_comment: The PPS Comment string
+
+    Returns:
+        True if PIF indicator found
+    """
+    special_cases = config.detect_special_cases(pps_comment)
+    return special_cases.get("paid_in_full", False)
+
+
+def is_self_pay(pps_comment: str) -> bool:
+    """
+    Check if this is a self-pay client (no insurance).
+
+    Args:
+        pps_comment: The PPS Comment string
+
+    Returns:
+        True if self-pay indicator found
+    """
+    special_cases = config.detect_special_cases(pps_comment)
+    return special_cases.get("self_pay", False)
+
+
+def get_fixed_session_rate(pps_comment: str) -> Optional[Decimal]:
+    """
+    Get fixed per-session rate if specified in PPS Comment.
+
+    Args:
+        pps_comment: The PPS Comment string
+
+    Returns:
+        Fixed rate as Decimal, or None if not specified
+    """
+    return config.extract_fixed_session_rate(pps_comment)
+
+
+def get_copay_amount(pps_comment: str) -> Optional[Decimal]:
+    """
+    Get copay amount if specified in PPS Comment.
+
+    Args:
+        pps_comment: The PPS Comment string
+
+    Returns:
+        Copay amount as Decimal, or None if not specified
+    """
+    return config.extract_copay_amount(pps_comment)
+
+
+def get_special_cases(pps_comment: str) -> dict:
+    """
+    Detect all special cases in PPS Comment.
+
+    Args:
+        pps_comment: The PPS Comment string
+
+    Returns:
+        Dictionary mapping special case names to True/False
+    """
+    return config.detect_special_cases(pps_comment)
 
 
 @dataclass
