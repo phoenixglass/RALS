@@ -31,15 +31,31 @@ SERVICE_TO_RATE_KEY: Dict[str, str] = {
     "Individual Therapy": "IT",
     "IT": "IT",
 
+    # EMDR variants (use IT rate)
+    "Outpatient - EMDR 38-52 minutes": "IT",
+    "Outpatient EMDR 38-52 minutes": "IT",
+
+    # Crisis Psychotherapy (use IT rate)
+    "Crisis Psychotherapy 30-60min": "IT",
+    "Crisis Psychotherapy additional 30 minutes": "IT",
+    "Telemed: Crisis Psychotherapy 30-60min": "IT",
+    "Telemed: Crisis Psychotherapy Addt. 30min": "IT",
+
     # Telemed IT variants
     "Telemed: Outpatient 53+": "IT",
+    "Telemed: Outpatient 53+ minutes": "IT",
     "Telemed: Outpatient 38-52 minutes": "IT",
     "Telemed: Outpatient 16-37 minutes": "IT",
     "Telemed: Outpatient EMDR 53+": "IT",
+    "Telemed: Outpatient EMDR 38-52 minutes": "IT",
 
     # IOP services - map to "IOP" rate
     "IOP-Wilton": "IOP",
     "IOP Huntington": "IOP",
+    "IOP Canaan": "IOP",
+    "IOP Chappaqua": "IOP",
+    "IOP NYC": "IOP",
+    "IOP Ramsey": "IOP",
     "IOP": "IOP",
     "Telemed: IOP": "IOP",
     "Telemed: IOP-Wilton": "IOP",
@@ -47,24 +63,41 @@ SERVICE_TO_RATE_KEY: Dict[str, str] = {
     # Group services - map to "Group" rate
     "Outpatient Group (75-90 minutes)": "Group",
     "Outpatient Group (75-90 r": "Group",  # Truncated version
+    "Outpatient Group (45-60 Minutes)": "Group",
+    "Outpatient Group (45-60 minutes)": "Group",
+    "Telemed: Outpatient Group (75-90 minutes)": "Group",
+    "Telemed: Outpatient Group (45-60 Minutes)": "Group",
+    "Telemed: Outpatient Group (45-60 minutes))": "Group",  # Note: has extra paren in source
     "Group": "Group",
     "Group Therapy": "Group",
 
     # Family Therapy (FT) services - map to "FT" rate
     "Family Session with Client 26+ minutes": "FT",
+    "Family Session w/out the Client 26+ minutes": "FT",
     "Family Session 26+ minutes": "FT",
+    "Outpatient Family Therapy w/ Client": "FT",
     "Family Therapy": "FT",
     "FT": "FT",
     "Telemed: Family Session with Client 26+ minutes": "FT",
+    "Telemed: Family Session with client 26+ minutes": "FT",  # Lowercase variant
+    "Telemed: Family Session w/o Client 26+ minutes": "FT",
 
     # Psychiatric services
     "Psychiatric Diag. Eval. W. Med Services": "Psych Eval",
     "Psychiatric Diag. Eval.": "Psych Eval",
     "Psych Eval": "Psych Eval",
-    "OP: Psych Appointment (30-39 minutes)": "Psych f/u",
+    "Telemed: Psych Diag. Eval. W. Med Services": "Psych Eval",
+    "OP: Psych Appointment (10-19 minutes)": "Psych f/u",  # Half-rate applies
     "OP: Psych Appointment (20-29 minutes)": "Psych f/u",  # Half-rate applies
-    "Telemed OP: Psych Appointment (30-39 minutes)": "Psych f/u",
+    "OP: Psych Appointment (30-39 minutes)": "Psych f/u",
+    "OP: Psych Appointment (40+ minutes)": "Psych f/u",
+    "OP: Psych 40+ with Medication Admin/Injection": "Psych f/u",
+    "OP: Psych w. Medication Induction": "Psych f/u",
+    "OP: Psych with Medication Admin/Injection": "Psych f/u",
+    "Telemed OP: Psych Appointment (10-19 minutes)": "Psych f/u",  # Half-rate
     "Telemed OP: Psych Appointment (20-29 minutes)": "Psych f/u",  # Half-rate
+    "Telemed OP: Psych Appointment (30-39 minutes)": "Psych f/u",
+    "Telemed OP: Psych Appointment (40+ minutes)": "Psych f/u",
 
     # Assessment services - map to "Assessment" rate
     "Assessment/Diag (BPS) w/o med services": "Assessment",
@@ -109,31 +142,57 @@ RATE_KEY_TO_ATTRIBUTE: Dict[str, str] = {
 # Used when generating payment comments like "$200.00 1/26 Tele IOP"
 
 SERVICE_ABBREVIATIONS: Dict[str, str] = {
-    # IOP
+    # IOP (all locations)
     "Telemed: IOP": "IOP",
     "Telemed: IOP-Wilton": "IOP",
     "IOP-Wilton": "IOP",
     "IOP Huntington": "IOP",
+    "IOP Canaan": "IOP",
+    "IOP Chappaqua": "IOP",
+    "IOP NYC": "IOP",
+    "IOP Ramsey": "IOP",
     "IOP": "IOP",
 
     # IT/Outpatient
     "Telemed: Outpatient 53+": "IT 53+",
+    "Telemed: Outpatient 53+ minutes": "IT 53+",
     "Outpatient 53+": "IT 53+",
     "Outpatient 16-37 minutes": "IT 16-37",
     "Outpatient 38-52 minutes": "IT 38-52",
     "Telemed: Outpatient 16-37 minutes": "IT 16-37",
     "Telemed: Outpatient 38-52 minutes": "IT 38-52",
+
+    # EMDR
     "Outpatient EMDR 53+": "EMDR 53+",
     "Outpatient EMDR 53+ minutes": "EMDR 53+",
     "Telemed: Outpatient EMDR 53+": "EMDR 53+",
+    "Outpatient - EMDR 38-52 minutes": "EMDR 38-52",
+    "Outpatient EMDR 38-52 minutes": "EMDR 38-52",
+    "Telemed: Outpatient EMDR 38-52 minutes": "EMDR 38-52",
 
-    # Psych
+    # Crisis Psychotherapy
+    "Crisis Psychotherapy 30-60min": "Crisis IT",
+    "Crisis Psychotherapy additional 30 minutes": "Crisis IT Addt",
+    "Telemed: Crisis Psychotherapy 30-60min": "Crisis IT",
+    "Telemed: Crisis Psychotherapy Addt. 30min": "Crisis IT Addt",
+
+    # Psych Eval
     "Psychiatric Diag. Eval. W. Med Services": "Psych Eval",
     "Psychiatric Diag. Eval.": "Psych Eval",
-    "OP: Psych Appointment (30-39 minutes)": "Psych f/u",
+    "Telemed: Psych Diag. Eval. W. Med Services": "Psych Eval",
+
+    # Psych Follow-up
+    "OP: Psych Appointment (10-19 minutes)": "Psych f/u",
     "OP: Psych Appointment (20-29 minutes)": "Psych f/u",
-    "Telemed OP: Psych Appointment (30-39 minutes)": "Psych f/u",
+    "OP: Psych Appointment (30-39 minutes)": "Psych f/u",
+    "OP: Psych Appointment (40+ minutes)": "Psych f/u",
+    "OP: Psych 40+ with Medication Admin/Injection": "Psych f/u + MAT",
+    "OP: Psych w. Medication Induction": "Psych f/u + MAT",
+    "OP: Psych with Medication Admin/Injection": "Psych f/u + MAT",
+    "Telemed OP: Psych Appointment (10-19 minutes)": "Psych f/u",
     "Telemed OP: Psych Appointment (20-29 minutes)": "Psych f/u",
+    "Telemed OP: Psych Appointment (30-39 minutes)": "Psych f/u",
+    "Telemed OP: Psych Appointment (40+ minutes)": "Psych f/u",
 
     # Assessment
     "Assessment/Diag (BPS) w/o med services": "Assess",
@@ -142,11 +201,20 @@ SERVICE_ABBREVIATIONS: Dict[str, str] = {
     # Group
     "Outpatient Group (75-90 minutes)": "Group",
     "Outpatient Group (75-90 r": "Group",
+    "Outpatient Group (45-60 Minutes)": "Group 45-60",
+    "Outpatient Group (45-60 minutes)": "Group 45-60",
+    "Telemed: Outpatient Group (75-90 minutes)": "Group",
+    "Telemed: Outpatient Group (45-60 Minutes)": "Group 45-60",
+    "Telemed: Outpatient Group (45-60 minutes))": "Group 45-60",
 
     # Family
     "Family Session with Client 26+ minutes": "FT",
+    "Family Session w/out the Client 26+ minutes": "FT w/o Client",
     "Family Session 26+ minutes": "FT",
+    "Outpatient Family Therapy w/ Client": "FT",
     "Telemed: Family Session with Client 26+ minutes": "FT",
+    "Telemed: Family Session with client 26+ minutes": "FT",
+    "Telemed: Family Session w/o Client 26+ minutes": "FT w/o Client",
 
     # MAT
     "Medication Admin/Injection": "MAT",
@@ -166,6 +234,11 @@ SERVICE_ABBREVIATIONS: Dict[str, str] = {
 NON_BILLABLE_SERVICES_EXACT: List[str] = [
     "RC Client Call",
     "No Show",
+    "No Show: Group Session",
+    "No Show: Intake",
+    "No Show: Medication Admin/Injection",
+    "No Show: Outpatient Session",
+    "No Show: Psychiatric Service",
     "Cancelled",
     "Late Cancel",
 ]
@@ -190,6 +263,8 @@ NON_BILLABLE_SERVICES_PATTERNS: List[str] = [
 HALF_RATE_PATTERNS: List[Tuple[str, str]] = [
     # (pattern to match in service type, rate_key affected)
     (r"16-37", "IT"),  # IT 16-37 minutes = half IT rate
+    (r"10-19.*[Pp]sych", "Psych f/u"),  # Psych 10-19 min = half psych f/u rate
+    (r"[Pp]sych.*10-19", "Psych f/u"),  # Alternative order
     (r"20-29.*[Pp]sych", "Psych f/u"),  # Psych 20-29 min = half psych f/u rate
     (r"[Pp]sych.*20-29", "Psych f/u"),  # Alternative order
 ]
