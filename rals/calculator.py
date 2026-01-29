@@ -12,6 +12,7 @@ from .models import (
     get_copay_amount, get_special_cases
 )
 from . import config
+from .config import is_nsf_service, get_nsf_rate
 
 
 class RateCalculator:
@@ -38,13 +39,14 @@ class RateCalculator:
 
         The calculation follows these rules:
         1. Non-billable services: $0 (RC Client Call, Drug Screen, etc.)
-        2. Paid in Full (PIF): $0
-        3. Fixed session rate: Use that rate instead of calculated
-        4. Bundled with IOP: $0 for IT/FT services
-        5. Self-pay virtual: Use self-pay rates, doesn't count toward deductible/OOP
-        6. Self-pay: Use self-pay rates
-        7. Copay: Use copay amount instead of coinsurance
-        8. Normal insurance:
+        2. No Show Fee (NSF): Always self-pay rates (IOP/Group=$25, others=SP rates)
+        3. Paid in Full (PIF): $0
+        4. Fixed session rate: Use that rate instead of calculated
+        5. Bundled with IOP: $0 for IT/FT services
+        6. Self-pay virtual: Use self-pay rates, doesn't count toward deductible/OOP
+        7. Self-pay: Use self-pay rates
+        8. Copay: Use copay amount instead of coinsurance
+        9. Normal insurance:
            - If deductible not met: patient pays full rate up to remaining deductible
            - Once deductible met: patient pays coinsurance (e.g., 20% of rate)
            - If OOP max reached: patient pays $0
@@ -60,6 +62,9 @@ class RateCalculator:
 
         # Check if this is a non-billable service
         is_service_non_billable = is_non_billable(service.service_type, service.pps_comment)
+
+        # Check if this is a No Show Fee (NSF) service - always self-pay
+        is_nsf = is_nsf_service(service.service_type)
 
         # Check if Paid in Full
         is_pif = special_cases.get("paid_in_full", False)
@@ -103,41 +108,48 @@ class RateCalculator:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount = Decimal("0.00")
 
-        # Priority 2: Paid in Full
+        # Priority 2: No Show Fee (NSF) - always self-pay, regardless of insurance
+        elif is_nsf:
+            full_rate = get_nsf_rate(service.service_type)
+            charge_amount = full_rate
+            is_self_pay_flag = True
+            # NSF does NOT count toward deductible/OOP
+
+        # Priority 3: Paid in Full
         elif is_pif:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount = Decimal("0.00")
 
-        # Priority 3: IOP covered 100%
+        # Priority 4: IOP covered 100%
         elif iop_covered_100:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount = Decimal("0.00")
 
-        # Priority 4: Fixed session rate
+        # Priority 5: Fixed session rate
         elif fixed_rate is not None:
             full_rate = fixed_rate
             charge_amount = fixed_rate
             is_self_pay_flag = True
             # Fixed rates don't count toward deductible/OOP
 
-        # Priority 5: Bundled with IOP
+        # Priority 6: Bundled with IOP
         elif is_bundled:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             charge_amount = Decimal("0.00")
 
-        # Priority 6: Self-pay virtual
+        # Priority 7: Self-pay virtual
         elif is_sp_virtual:
             full_rate = SELF_PAY_VIRTUAL_RATES.get_rate_for_service(service.service_type)
             charge_amount = full_rate
             is_self_pay_flag = True
 
-        # Priority 7: General self-pay
+        # Priority 8: General self-pay
         elif is_sp:
             full_rate = SELF_PAY_RATES.get_rate_for_service(service.service_type)
             charge_amount = full_rate
             is_self_pay_flag = True
 
-        # Priority 8: Copay plan
+        # Priority 9: Copay plan
         elif copay_amount is not None:
             full_rate = self.rate_schedule.get_rate_for_service(service.service_type)
             # Cap copay at remaining OOP

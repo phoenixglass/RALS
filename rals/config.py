@@ -162,23 +162,124 @@ SERVICE_ABBREVIATIONS: Dict[str, str] = {
 # =============================================================================
 # Services that should always be $0 charge
 # Can be exact matches or patterns (regex)
+# NOTE: No Shows (NSF) are NOT non-billable - they are billed at self-pay rates
 
 NON_BILLABLE_SERVICES_EXACT: List[str] = [
     "RC Client Call",
-    "No Show",
     "Cancelled",
     "Late Cancel",
 ]
 
 NON_BILLABLE_SERVICES_PATTERNS: List[str] = [
     r"^RC\s+",  # Anything starting with "RC "
-    r"No\s*Show",
     r"Cancel",
     r"Late\s+Cancel",
     r"Drug\s+Screen",  # Drug screens typically non-billable to client
     r"\*PP\s+Unsigned\*",  # Unsigned paperwork
     r"\*Unsigned\s+PP\*",
 ]
+
+
+# =============================================================================
+# NO SHOW FEE (NSF) RATES
+# =============================================================================
+# No Shows are always billed at self-pay rates, regardless of insurance status.
+# NSF services are identified by "NSF" prefix in service type.
+
+NSF_RATES: Dict[str, Decimal] = {
+    # IOP and Group NSF: Always $25.00 flat fee
+    "iop_rate": Decimal("25.00"),
+    "group_rate": Decimal("25.00"),
+
+    # All psych appointments (including evals): $200 flat
+    "psych_eval_rate": Decimal("200.00"),
+    "psych_followup_rate": Decimal("200.00"),
+
+    # Assessment/Intake: $200
+    "assessment_rate": Decimal("200.00"),
+
+    # IT full length (38+ minutes): $175
+    "it_rate": Decimal("175.00"),
+
+    # IT short (16-37 minutes): $87.50
+    "it_rate_short": Decimal("87.50"),
+
+    # FT: Use standard self-pay rate
+    "ft_rate": Decimal("275.00"),
+
+    # MAT: Use standard self-pay rate
+    "mat_rate": Decimal("200.00"),
+
+    # EMDR: Same as IT
+    "emdr_rate": Decimal("175.00"),
+}
+
+
+def is_nsf_service(service_type: str) -> bool:
+    """Check if this is a No Show Fee (NSF) service."""
+    if not service_type:
+        return False
+    return service_type.upper().startswith("NSF") or " NSF" in service_type.upper()
+
+
+def get_nsf_rate(service_type: str) -> Decimal:
+    """
+    Get the NSF rate for a service type.
+
+    NSF services are always billed at self-pay rates:
+    - IOP/Group: $25.00
+    - Psych (any): $200.00
+    - Assessment: $200.00
+    - IT full (38+): $175.00
+    - IT short (16-37): $87.50
+
+    Args:
+        service_type: The service type (with or without NSF prefix)
+
+    Returns:
+        The NSF rate for this service
+    """
+    service_lower = service_type.lower()
+
+    # Remove NSF prefix for matching
+    clean_service = re.sub(r'^nsf\s*', '', service_lower, flags=re.IGNORECASE).strip()
+
+    # IOP and Group: Always $25
+    if "iop" in clean_service:
+        return NSF_RATES["iop_rate"]
+    if "group" in clean_service:
+        return NSF_RATES["group_rate"]
+
+    # All psych appointments (including evals): $200
+    if "psych" in clean_service:
+        return NSF_RATES["psych_eval_rate"]  # Same rate for eval and f/u
+
+    # Assessment/Intake: $200
+    if "assessment" in clean_service or "intake" in clean_service:
+        return NSF_RATES["assessment_rate"]
+
+    # IT short (16-37 minutes): $87.50
+    if "16-37" in clean_service:
+        return NSF_RATES["it_rate_short"]
+
+    # IT/Outpatient full length: $175
+    if "outpatient" in clean_service or "individual" in clean_service or clean_service.startswith("it"):
+        return NSF_RATES["it_rate"]
+
+    # Family therapy
+    if "family" in clean_service or clean_service.startswith("ft"):
+        return NSF_RATES["ft_rate"]
+
+    # MAT
+    if "medication" in clean_service or "mat" in clean_service:
+        return NSF_RATES["mat_rate"]
+
+    # EMDR
+    if "emdr" in clean_service:
+        return NSF_RATES["emdr_rate"]
+
+    # Default to IT rate
+    return NSF_RATES["it_rate"]
 
 
 # =============================================================================
